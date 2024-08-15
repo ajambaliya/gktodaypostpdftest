@@ -6,23 +6,22 @@ from telegram.constants import ParseMode
 from pymongo import MongoClient
 import random
 import math
+from datetime import datetime, timedelta
 from docx import Document
-from datetime import datetime
-import tempfile
-import subprocess
+from docx.shared import Pt
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+import pdfkit
+import requests
 
-# Environment variables
+# Read environment variables
 mongo_uri = os.getenv('MONGO_URI')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 DEFAULT_CHANNEL = os.getenv('DEFAULT_CHANNEL')
+TEMPLATE_URL = os.getenv('TEMPLATE_URL')
 
 # Initialize MongoDB client and Telegram bot
 client = MongoClient(mongo_uri)
 bot = Bot(token=BOT_TOKEN)
-
-# MongoDB Databases
-questions_db = client['MasterQuestions']
-days_db = client['QuizDays']
 
 def fetch_collections(database_name):
     db = client[database_name]
@@ -38,9 +37,37 @@ def get_correct_option_index(answer_key):
     option_mapping = {'a': 0, 'b': 1, 'c': 2, 'd': 3}
     return option_mapping.get(answer_key.lower(), None)
 
-async def send_intro_message(collection_name, num_questions, quiz_day):
+def get_quiz_day():
+    db = client['QuizDays']
+    collection = db['Days']
+    today = datetime.now().date()
+    day_record = collection.find_one({'date': today})
+    
+    if day_record:
+        return day_record['day']
+    else:
+        last_day_record = collection.find_one(sort=[('date', pymongo.DESCENDING)])
+        new_day = 1 if not last_day_record else last_day_record['day'] + 1
+        collection.insert_one({'date': today, 'day': new_day})
+        return new_day
+
+def update_quiz_counter(collection_name):
+    db = client['QuizCounters']
+    collection = db['Counters']
+    counter_record = collection.find_one({'collection_name': collection_name})
+    
+    if counter_record:
+        new_count = counter_record['count'] + 1
+        collection.update_one({'collection_name': collection_name}, {'$set': {'count': new_count}})
+        return new_count
+    else:
+        collection.insert_one({'collection_name': collection_name, 'count': 1})
+        return 1
+
+async def send_intro_message(collection_name, num_questions):
+    day = get_quiz_day()
     intro_message = (
-        f"🎯 *આજની કવિઝ ({quiz_day})* 🎯\n\n"
+        f"🎯 *આજની કવિઝ - Day {day}* 🎯\n\n"
         f"📚 વિષય: *{collection_name}*\n"
         f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n\n"
         f"🕐 અમારા ટેલીગ્રામ ચેનલમાં દરરોજ બપોરે *1 વાગ્યે* અને રાત્રે *9 વાગ્યે* "
@@ -80,67 +107,56 @@ async def send_quiz_to_channel(question, options, correct_option_index, explanat
     except Exception as e:
         print(f"Error sending quiz: {e}")
 
-def generate_pdf(collection_name, questions, quiz_day):
-    doc = Document()
-    doc.add_heading(f'{quiz_day} - {collection_name} Quiz', level=1)
-    
-    for i, question in enumerate(questions):
-        question_text = question.get('Question', 'No question text')
-        options = [
-            question.get('Option A', 'No option'), 
-            question.get('Option B', 'No option'), 
-            question.get('Option C', 'No option'), 
-            question.get('Option D', 'No option')
-        ]
-        correct_option = question.get('Answer', 'a').upper()
-        doc.add_heading(f'Q{i+1}: {question_text}', level=2)
-        for option in options:
-            doc.add_paragraph(option, style='List Bullet')
-        doc.add_paragraph(f'Answer: {correct_option}', style='Intense Quote')
-        doc.add_paragraph('')
+def fetch_template():
+    response = requests.get(TEMPLATE_URL)
+    with open("template.docx", "wb") as file:
+        file.write(response.content)
+    return "template.docx"
 
-    doc.add_paragraph("Join our Telegram channel for daily quizzes: [@CurrentAdda](https://telegram.me/currentadda)", style='Intense Quote')
+def update_document_with_content(doc_path, intro_message, questions):
+    doc = Document(doc_path)
     
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_docx:
-        doc.save(tmp_docx.name)
-        return tmp_docx.name
-
-def convert_docx_to_pdf(docx_path, pdf_path):
-    subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
-                    os.path.dirname(pdf_path), docx_path], check=True)
-    os.rename(docx_path.replace('.docx', '.pdf'), pdf_path)
-
-async def send_pdf_to_telegram(pdf_path, quiz_day):
-    caption = f"📄 {quiz_day} Quiz PDF\n\nJoin us on Telegram: [@CurrentAdda](https://telegram.me/currentadda)"
-    
-    for _ in range(3):
-        try:
-            with open(pdf_path, 'rb') as pdf_file:
-                await bot.send_document(chat_id=DEFAULT_CHANNEL, document=pdf_file, caption=caption, parse_mode=ParseMode.MARKDOWN)
+    # Insert intro message
+    for paragraph in doc.paragraphs:
+        if '<<START_CONTENT>>' in paragraph.text:
+            paragraph.text = intro_message
+            paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            paragraph.style.font.size = Pt(12)
             break
-        except Exception as e:
-            print(f"Error sending PDF: {e}")
-            await asyncio.sleep(5)
+    
+    # Insert questions
+    for paragraph in doc.paragraphs:
+        if '<<END_CONTENT>>' in paragraph.text:
+            for q in questions:
+                question_paragraph = doc.add_paragraph(f"{q['question']}")
+                question_paragraph.style.font.size = Pt(10)
+            break
+    
+    doc.save(doc_path)
+
+def convert_to_pdf(doc_path, pdf_name):
+    pdfkit.from_file(doc_path, pdf_name)
+
+async def send_pdf_to_channel(pdf_path, caption):
+    try:
+        with open(pdf_path, 'rb') as pdf_file:
+            await bot.send_document(chat_id=DEFAULT_CHANNEL, document=pdf_file, caption=caption)
+        print("PDF sent successfully")
+    except Exception as e:
+        print(f"Error sending PDF: {e}")
 
 async def main():
-    quiz_day = datetime.now().strftime('%A, %d %B %Y')
-    days_collection = days_db['QuizDays']
-    if days_collection.find_one({'day': quiz_day}):
-        print(f"Quiz already sent for {quiz_day}. Exiting.")
-        return
-    
-    days_collection.insert_one({'day': quiz_day})
-    
     collections = fetch_collections('MasterQuestions')
+    
     if not collections:
         print("No collections found in the database.")
         return
     
     selected_collection = random.choice(collections)
-    num_questions = 10
+    num_questions = 3
     questions = fetch_questions_from_collection('MasterQuestions', selected_collection, num_questions)
     
-    await send_intro_message(selected_collection, num_questions, quiz_day)
+    await send_intro_message(selected_collection, num_questions)
     await asyncio.sleep(5)
     
     for question in questions:
@@ -154,8 +170,21 @@ async def main():
             await send_quiz_to_channel(question_text, options, correct_option_index, explanation)
             await asyncio.sleep(3)
     
-    pdf_path = generate_pdf(selected_collection, questions, quiz_day)
-    await send_pdf_to_telegram(pdf_path, quiz_day)
+    template_path = fetch_template()
+    intro_message = (
+        f"🎯 *Day {get_quiz_day()}* 🎯\n\n"
+        f"📚 વિષય: *{selected_collection}*\n"
+        f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n"
+    )
+    
+    update_document_with_content(template_path, intro_message, questions)
+    
+    pdf_count = update_quiz_counter(selected_collection)
+    pdf_name = f"{selected_collection} Quiz {pdf_count}.pdf"
+    convert_to_pdf(template_path, pdf_name)
+    
+    caption = f"📄 *{selected_collection} Quiz {pdf_count}* - Day {get_quiz_day()}\n\nJoin our channel for more quizzes! @CurrentAdda"
+    await send_pdf_to_channel(pdf_name, caption)
 
 if __name__ == "__main__":
     asyncio.run(main())
