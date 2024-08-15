@@ -1,15 +1,15 @@
 import io
 import os
 import requests
-from bs4 import BeautifulSoup
-from docx import Document
+from odf.opendocument import load
+from odf.text import H, P, List
+from odf import tei
 from datetime import datetime
 import pymongo
 from deep_translator import GoogleTranslator, exceptions
 import asyncio
 import telegram
 import tempfile
-import subprocess
 
 # MongoDB setup
 DB_NAME = os.environ.get('DB_NAME')
@@ -86,39 +86,35 @@ async def scrape_and_get_content(url):
 def insert_content_between_placeholders(doc, content_list):
     start_placeholder = end_placeholder = None
     
-    for i, para in enumerate(doc.paragraphs):
-        if "START_CONTENT" in para.text:
+    for i, element in enumerate(doc.getElementsByType(tei.TextElement)):
+        if "START_CONTENT" in element.text:
             start_placeholder = i
-        elif "END_CONTENT" in para.text:
+        elif "END_CONTENT" in element.text:
             end_placeholder = i
             break
     
     if start_placeholder is None or end_placeholder is None:
         raise Exception("Could not find both placeholders")
 
-    for i in range(end_placeholder - 1, start_placeholder, -1):
-        p = doc.paragraphs[i]
-        p._element.getparent().remove(p._element)
-
-    content_list = content_list[::-1]
-
-    for content in content_list:
+    # Remove content between placeholders
+    while len(doc.text) > start_placeholder + 1:
+        doc.text.remove(doc.text[start_placeholder + 1])
+    
+    # Insert new content
+    for content in reversed(content_list):
         if content['type'] == 'heading':
-            doc.paragraphs[start_placeholder]._element.addnext(doc.add_heading(content['text'], level=1)._element)
+            doc.text.insert(start_placeholder + 1, H(text=content['text'], level=1))
         elif content['type'] == 'paragraph':
-            doc.paragraphs[start_placeholder]._element.addnext(doc.add_paragraph(content['text'], style='Normal')._element)
+            doc.text.insert(start_placeholder + 1, P(text=content['text']))
         elif content['type'] == 'heading_2':
-            doc.paragraphs[start_placeholder]._element.addnext(doc.add_heading(content['text'], level=2)._element)
+            doc.text.insert(start_placeholder + 1, H(text=content['text'], level=2))
         elif content['type'] == 'heading_4':
-            doc.paragraphs[start_placeholder]._element.addnext(doc.add_heading(content['text'], level=4)._element)
+            doc.text.insert(start_placeholder + 1, H(text=content['text'], level=4))
         elif content['type'] == 'list_item':
-            doc.paragraphs[start_placeholder]._element.addnext(doc.add_paragraph(content['text'], style='List Bullet')._element)
-
-    doc.paragraphs[start_placeholder].text = ""
-    doc.paragraphs[end_placeholder].text = ""
+            doc.text.insert(start_placeholder + 1, List(text=content['text']))
 
 def download_template(url):
-    download_url = url.replace('/edit?usp=sharing', '/export?format=docx')
+    download_url = url.replace('/edit?usp=sharing', '/export?format=odt')
     try:
         response = requests.get(download_url)
         response.raise_for_status()
@@ -136,12 +132,12 @@ def check_and_insert_urls(urls):
             collection.insert_one({'url': url})
     return new_urls
 
-def convert_docx_to_pdf(docx_path, pdf_path):
+def convert_odt_to_pdf(odt_path, pdf_path):
     try:
         subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
-                        os.path.dirname(pdf_path), docx_path], 
+                        os.path.dirname(pdf_path), odt_path], 
                        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        original_pdf = os.path.splitext(os.path.basename(docx_path))[0] + '.pdf'
+        original_pdf = os.path.splitext(os.path.basename(odt_path))[0] + '.pdf'
         original_pdf_path = os.path.join(os.path.dirname(pdf_path), original_pdf)
         os.rename(original_pdf_path, pdf_path)
     except subprocess.CalledProcessError:
@@ -176,7 +172,13 @@ async def main():
         
         template_bytes = download_template(template_url)
         
-        doc = Document(template_bytes)
+        # Save ODT file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as tmp_odt:
+            tmp_odt.write(template_bytes.getvalue())
+            odt_path = tmp_odt.name
+        
+        # Process ODT file
+        doc = load(odt_path)
         
         all_content = []
         english_titles = []
@@ -187,12 +189,12 @@ async def main():
         
         insert_content_between_placeholders(doc, all_content)
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_docx:
-            doc.save(tmp_docx.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as tmp_odt:
+            doc.save(tmp_odt.name)
         
-        pdf_path = tmp_docx.name.replace('.docx', '.pdf')
+        pdf_path = tmp_odt.name.replace('.odt', '.pdf')
         
-        convert_docx_to_pdf(tmp_docx.name, pdf_path)
+        convert_odt_to_pdf(tmp_odt.name, pdf_path)
         
         # Rename the PDF file
         current_date = datetime.now().strftime('%d-%m-%Y')
@@ -213,11 +215,11 @@ async def main():
         
         await send_pdf_to_telegram(renamed_pdf_path, bot_token, channel_id, caption)
         
-        os.unlink(tmp_docx.name)
+        os.unlink(tmp_odt.name)
         os.unlink(renamed_pdf_path)
         
     except Exception as e:
-        raise
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
