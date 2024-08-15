@@ -115,7 +115,7 @@ async def send_quiz_to_channel(question, options, correct_option_index, explanat
 
 def fetch_template():
     response = requests.get(TEMPLATE_URL)
-    with open("template.docx", "wb") as file:
+    with open("template-quiz.docx", "wb") as file:
         file.write(response.content)
     return "template.docx"
 
