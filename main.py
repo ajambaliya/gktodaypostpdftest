@@ -12,6 +12,7 @@ from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 import pdfkit
 import requests
+from datetime import datetime, timedelta
 
 # Read environment variables
 mongo_uri = os.getenv('MONGO_URI')
@@ -37,18 +38,23 @@ def get_correct_option_index(answer_key):
     option_mapping = {'a': 0, 'b': 1, 'c': 2, 'd': 3}
     return option_mapping.get(answer_key.lower(), None)
 
-def get_quiz_day():
+ef get_quiz_day():
     db = client['QuizDays']
     collection = db['Days']
-    today = datetime.now().date()
-    day_record = collection.find_one({'date': today})
+    today = datetime.now().date()  # Get today's date
+    today_datetime = datetime.combine(today, datetime.min.time())  # Convert date to datetime
+
+    # Find a record for today
+    day_record = collection.find_one({'date': today_datetime})
     
     if day_record:
         return day_record['day']
     else:
         last_day_record = collection.find_one(sort=[('date', pymongo.DESCENDING)])
         new_day = 1 if not last_day_record else last_day_record['day'] + 1
-        collection.insert_one({'date': today, 'day': new_day})
+        
+        # Store today’s date as datetime
+        collection.insert_one({'date': today_datetime, 'day': new_day})
         return new_day
 
 def update_quiz_counter(collection_name):
