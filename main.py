@@ -199,6 +199,7 @@ async def main():
         base_url = "https://www.gktoday.in/current-affairs/"
         article_urls = fetch_article_urls(base_url, 2)
         new_urls = check_and_insert_urls(article_urls)
+        
         if not new_urls:
             print("No new URLs found.")
             return
