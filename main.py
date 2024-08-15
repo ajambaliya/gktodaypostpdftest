@@ -1,7 +1,6 @@
 import io
 import os
 import requests
-from bs4 import BeautifulSoup
 from odf.opendocument import load
 from odf.text import P, H
 from datetime import datetime
@@ -11,7 +10,6 @@ import asyncio
 import telegram
 import tempfile
 import subprocess
-import zipfile
 
 # MongoDB setup
 DB_NAME = os.environ.get('DB_NAME')
@@ -124,15 +122,15 @@ def download_template(url):
         response = requests.get(download_url)
         response.raise_for_status()
         return io.BytesIO(response.content)
-    except requests.exceptions.RequestException:
-        raise
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Failed to download template: {e}")
 
 def load_odt_template(template_bytes):
     try:
         template = load(template_bytes)
         return template
-    except zipfile.BadZipFile:
-        raise Exception("Failed to load ODT file. The file may be corrupt or not in the correct format.")
+    except Exception as e:
+        raise Exception(f"Failed to load ODT file. The file may be corrupt or not in the correct format. Details: {e}")
 
 def check_and_insert_urls(urls):
     new_urls = []
@@ -152,8 +150,8 @@ def convert_odt_to_pdf(odt_path, pdf_path):
         original_pdf = os.path.splitext(os.path.basename(odt_path))[0] + '.pdf'
         original_pdf_path = os.path.join(os.path.dirname(pdf_path), original_pdf)
         os.rename(original_pdf_path, pdf_path)
-    except subprocess.CalledProcessError:
-        raise
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Failed to convert ODT to PDF. Details: {e}")
 
 def rename_pdf(pdf_path, new_name):
     new_pdf_path = os.path.join(os.path.dirname(pdf_path), new_name)
@@ -223,7 +221,7 @@ async def main():
         os.unlink(renamed_pdf_path)
         
     except Exception as e:
-        raise
+        print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
