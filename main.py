@@ -36,16 +36,24 @@ class ContentInsertionError(Exception):
 
 class TelegramSendError(Exception):
     pass
+
 def fetch_article_urls(base_url, pages):
     article_urls = []
     for page in range(1, pages + 1):
         url = base_url if page == 1 else f"{base_url}page/{page}/"
-        response = requests.get(url)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        for h1_tag in soup.find_all('h1', id='list'):
-            a_tag = h1_tag.find('a')
-            if a_tag and a_tag.get('href'):
-                article_urls.append(a_tag['href'])
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Find all <h1> tags with id="list"
+            h1_tags = soup.find_all('h1', id='list')
+            for h1_tag in h1_tags:
+                a_tag = h1_tag.find('a')
+                if a_tag and a_tag.get('href'):
+                    article_urls.append(a_tag['href'])
+        except requests.exceptions.RequestException as e:
+            print(f"Request Error: {e}")
     return article_urls
 
 def translate_to_gujarati(text):
@@ -206,27 +214,14 @@ async def main():
         template_bytes = download_template(template_url)
         doc = load(template_bytes)
 
-        all_content = []
-        english_titles = []
-        tasks = [scrape_and_get_content(url) for url in new_urls]
-        results = await asyncio.gather(*tasks)
+        content_lists = await asyncio.gather(*[scrape_and_get_content(url) for url in new_urls])
 
-        for content_list in results:
-            if content_list:
-                all_content.extend(content_list)
-                english_titles.append(content_list[0]['text'])  # Assuming the first item is the title
+        for content_list in content_lists:
+            insert_content_between_placeholders(doc, content_list)
 
-        insert_content_between_placeholders(doc, all_content)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as tmp_odt:
-            doc.save(tmp_odt.name)
-
-        pdf_path = tmp_odt.name.replace('.odt', '.pdf')
-        convert_odt_to_pdf(tmp_odt.name, pdf_path)
-
-        # Rename the PDF file
-        current_date = datetime.now().strftime('%d-%m-%Y')
-        new_pdf_name = f"{current_date} Current Affairs.pdf"
+        pdf_path = '/tmp/converted_document.pdf'
+        convert_odt_to_pdf('/tmp/template.odt', pdf_path)
+        new_pdf_name = f"Current_Affairs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         renamed_pdf_path = rename_pdf(pdf_path, new_pdf_name)
 
         bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
