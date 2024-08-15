@@ -38,7 +38,7 @@ def get_correct_option_index(answer_key):
     option_mapping = {'a': 0, 'b': 1, 'c': 2, 'd': 3}
     return option_mapping.get(answer_key.lower(), None)
 
-ef get_quiz_day():
+def get_quiz_day():
     db = client['QuizDays']
     collection = db['Days']
     today = datetime.now().date()  # Get today's date
