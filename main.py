@@ -101,29 +101,35 @@ def insert_content_between_placeholders(doc, content_list):
         
         for i, para in enumerate(doc.text.getElementsByType(P)):
             para_text = "".join([element.text if hasattr(element, 'text') else '' for element in para.childNodes])
-            if "START_CONTENT" in para_text:
+            if "START_CONTENT" in para_text.strip():
                 start_placeholder = i
-            elif "END_CONTENT" in para_text:
+            elif "END_CONTENT" in para_text.strip():
                 end_placeholder = i
                 break
 
-        if start_placeholder is None or end_placeholder is None:
-            raise Exception("Could not find both placeholders")
+        if start_placeholder is None:
+            raise Exception("Could not find the START_CONTENT placeholder")
+        if end_placeholder is None:
+            raise Exception("Could not find the END_CONTENT placeholder")
 
+        # Clear content between the placeholders
         for i in range(end_placeholder - 1, start_placeholder, -1):
             doc.text.removeElement(doc.text.getElementsByType(P)[i])
 
+        # Insert the new content
         content_list.reverse()
         for content in content_list:
             p = P()
             p.addElement(Span(text=content['text']))
             doc.text.insertBefore(p, doc.text.getElementsByType(P)[start_placeholder + 1])
 
+        # Clear the placeholders themselves
         doc.text.getElementsByType(P)[start_placeholder].setTextContent("")
         doc.text.getElementsByType(P)[end_placeholder].setTextContent("")
     except Exception as e:
         logging.error(f"Error inserting content into ODT document: {e}")
         raise
+
 
 def download_template(url):
     try:
