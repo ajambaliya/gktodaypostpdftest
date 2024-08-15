@@ -2,6 +2,8 @@ import io
 import os
 import requests
 from bs4 import BeautifulSoup
+from odf.opendocument import load
+from odf.text import P, H
 from datetime import datetime
 import pymongo
 from deep_translator import GoogleTranslator, exceptions
@@ -9,8 +11,7 @@ import asyncio
 import telegram
 import tempfile
 import subprocess
-from odf.opendocument import load
-from odf.text import P, H, List, ListItem
+import zipfile
 
 # MongoDB setup
 DB_NAME = os.environ.get('DB_NAME')
@@ -84,51 +85,52 @@ async def scrape_and_get_content(url):
                 content_list.append({'type': 'list_item', 'text': f"• {li_text}"})
     return content_list
 
-def insert_content_between_placeholders(odt, content_list):
-    start_placeholder = None
-    end_placeholder = None
+def insert_content_between_placeholders(doc, content_list):
+    start_placeholder = end_placeholder = None
     
-    for element in odt.getElementsByType(P):
-        if "START_CONTENT" in element.text:
-            start_placeholder = element
-        elif "END_CONTENT" in element.text:
-            end_placeholder = element
+    for i, para in enumerate(doc.getElementsByType(P)):
+        if "START_CONTENT" in str(para):
+            start_placeholder = i
+        elif "END_CONTENT" in str(para):
+            end_placeholder = i
             break
     
     if start_placeholder is None or end_placeholder is None:
         raise Exception("Could not find both placeholders")
 
-    parent = start_placeholder.parentNode
-    
-    for element in reversed(content_list):
-        if element['type'] == 'heading':
-            h1 = H(outlinelevel=1, text=element['text'])
-            parent.insertBefore(h1, end_placeholder)
-        elif element['type'] == 'paragraph':
-            p = P(text=element['text'])
-            parent.insertBefore(p, end_placeholder)
-        elif element['type'] == 'heading_2':
-            h2 = H(outlinelevel=2, text=element['text'])
-            parent.insertBefore(h2, end_placeholder)
-        elif element['type'] == 'heading_4':
-            h4 = H(outlinelevel=4, text=element['text'])
-            parent.insertBefore(h4, end_placeholder)
-        elif element['type'] == 'list_item':
-            li = ListItem(text=element['text'])
-            lst = List()
-            lst.addElement(li)
-            parent.insertBefore(lst, end_placeholder)
+    content_list = content_list[::-1]
 
-    parent.removeChild(start_placeholder)
-    parent.removeChild(end_placeholder)
+    for content in content_list:
+        if content['type'] == 'heading':
+            para = H(outlinelevel=1, text=content['text'])
+        elif content['type'] == 'paragraph':
+            para = P(text=content['text'])
+        elif content['type'] == 'heading_2':
+            para = H(outlinelevel=2, text=content['text'])
+        elif content['type'] == 'heading_4':
+            para = H(outlinelevel=4, text=content['text'])
+        elif content['type'] == 'list_item':
+            para = P(text=content['text'])
+        
+        doc.text.insert(start_placeholder + 1, para)
+
+    del doc.text[start_placeholder]
+    del doc.text[end_placeholder - 1]
 
 def download_template(url):
     try:
         response = requests.get(url)
         response.raise_for_status()
         return io.BytesIO(response.content)
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Failed to download template: {str(e)}")
+    except requests.exceptions.RequestException:
+        raise
+
+def load_odt_template(template_bytes):
+    try:
+        template = load(template_bytes)
+        return template
+    except zipfile.BadZipFile:
+        raise Exception("Failed to load ODT file. The file may be corrupt or not in the correct format.")
 
 def check_and_insert_urls(urls):
     new_urls = []
@@ -148,8 +150,8 @@ def convert_odt_to_pdf(odt_path, pdf_path):
         original_pdf = os.path.splitext(os.path.basename(odt_path))[0] + '.pdf'
         original_pdf_path = os.path.join(os.path.dirname(pdf_path), original_pdf)
         os.rename(original_pdf_path, pdf_path)
-    except subprocess.CalledProcessError as e:
-        raise Exception(f"Failed to convert ODT to PDF: {str(e)}")
+    except subprocess.CalledProcessError:
+        raise
 
 def rename_pdf(pdf_path, new_name):
     new_pdf_path = os.path.join(os.path.dirname(pdf_path), new_name)
@@ -179,7 +181,8 @@ async def main():
             raise ValueError("TEMPLATE_URL environment variable is not set")
         
         template_bytes = download_template(template_url)
-        odt = load(template_bytes)
+        
+        doc = load_odt_template(template_bytes)
         
         all_content = []
         english_titles = []
@@ -188,10 +191,10 @@ async def main():
             all_content.extend(content_list)
             english_titles.append(content_list[0]['text'])  # Assuming the first item is the title
         
-        insert_content_between_placeholders(odt, all_content)
+        insert_content_between_placeholders(doc, all_content)
         
         with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as tmp_odt:
-            odt.save(tmp_odt.name)
+            doc.save(tmp_odt.name)
         
         pdf_path = tmp_odt.name.replace('.odt', '.pdf')
         
@@ -210,14 +213,17 @@ async def main():
         
         caption = (
             f"🎗️ {datetime.now().strftime('%d %B %Y')} Current Affairs 🎗️\n\n"
-            + '\n'.join(english_titles)
+            + '\n'.join([f"👉 {title}" for title in english_titles]) + '\n\n'
+            + "🎉 Join us :- @CurrentAdda 🎉"
         )
         
         await send_pdf_to_telegram(renamed_pdf_path, bot_token, channel_id, caption)
         
+        os.unlink(tmp_odt.name)
+        os.unlink(renamed_pdf_path)
+        
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        raise
 
-# To run the script
 if __name__ == "__main__":
     asyncio.run(main())
