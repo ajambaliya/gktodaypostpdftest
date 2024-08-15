@@ -132,7 +132,6 @@ def download_template(url):
     except requests.exceptions.RequestException as e:
         logger.error(f"Error downloading template: {e}")
         raise
-
 def update_document_with_content(doc_io, intro_message, questions, collection_name, quiz_number):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_docx_file:
         temp_docx_file.write(doc_io.read())
@@ -140,47 +139,54 @@ def update_document_with_content(doc_io, intro_message, questions, collection_na
     
     doc = Document(temp_docx_path)
     
-    # Insert intro message
-    start_found = False
-    end_found = False
-    for paragraph in doc.paragraphs:
+    content_start = None
+    content_end = None
+    
+    for i, paragraph in enumerate(doc.paragraphs):
         if '<<START_CONTENT>>' in paragraph.text:
-            paragraph.text = intro_message
-            paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            paragraph.style.font.size = Pt(14)
-            paragraph.style.font.bold = True
-            paragraph.style.font.color.rgb = RGBColor(0, 0, 128)  # Dark blue color
-            start_found = True
+            content_start = i
         elif '<<END_CONTENT>>' in paragraph.text:
-            paragraph.text = ""  # Remove the placeholder
-            end_found = True
-            # Insert questions after this paragraph
-            for q in questions:
-                question_text = q.get('Question', 'No question text')
-                question_paragraph = doc.add_paragraph(f"Q: {question_text}")
-                question_paragraph.style.font.size = Pt(12)
-                
-                options = [
-                    f"A) {q.get('Option A', 'No option')}",
-                    f"B) {q.get('Option B', 'No option')}",
-                    f"C) {q.get('Option C', 'No option')}",
-                    f"D) {q.get('Option D', 'No option')}"
-                ]
-                for option in options:
-                    option_paragraph = doc.add_paragraph(option)
-                    option_paragraph.style.font.size = Pt(10)
-                
-                answer = f"Answer: {q.get('Answer', 'Not provided')}"
-                answer_paragraph = doc.add_paragraph(answer)
-                answer_paragraph.style.font.size = Pt(10)
-                answer_paragraph.style.font.bold = True
-                
-                doc.add_paragraph()  # Add a blank line between questions
-
-    if not start_found:
-        logger.warning("No <<START_CONTENT>> placeholder found in the document.")
-    if not end_found:
-        logger.warning("No <<END_CONTENT>> placeholder found in the document.")
+            content_end = i
+            break
+    
+    if content_start is not None and content_end is not None:
+        # Clear existing paragraphs between placeholders
+        for i in range(content_end - 1, content_start, -1):
+            doc._element.body.remove(doc.paragraphs[i]._element)
+        
+        # Insert intro message
+        intro_para = doc.paragraphs[content_start]
+        intro_para.text = intro_message
+        intro_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        intro_para.style.font.size = Pt(14)
+        intro_para.style.font.bold = True
+        intro_para.style.font.color.rgb = RGBColor(0, 0, 128)  # Dark blue color
+        
+        # Insert questions
+        for q in questions:
+            question_text = q.get('Question', 'No question text')
+            question_paragraph = doc.add_paragraph(f"Q: {question_text}", style='Normal')
+            question_paragraph.insert_paragraph_before()
+            question_paragraph.style.font.size = Pt(12)
+            
+            options = [
+                f"A) {q.get('Option A', 'No option')}",
+                f"B) {q.get('Option B', 'No option')}",
+                f"C) {q.get('Option C', 'No option')}",
+                f"D) {q.get('Option D', 'No option')}"
+            ]
+            for option in options:
+                option_paragraph = doc.add_paragraph(option, style='Normal')
+                option_paragraph.style.font.size = Pt(10)
+            
+            answer = f"Answer: {q.get('Answer', 'Not provided')}"
+            answer_paragraph = doc.add_paragraph(answer, style='Normal')
+            answer_paragraph.style.font.size = Pt(10)
+            answer_paragraph.style.font.bold = True
+            
+            doc.add_paragraph()  # Add a blank line between questions
+    else:
+        logger.warning("Could not find both <<START_CONTENT>> and <<END_CONTENT>> placeholders in the document.")
 
     updated_doc_path = os.path.join(tempfile.gettempdir(), f'{collection_name} Quiz {quiz_number}.docx')
     doc.save(updated_doc_path)
@@ -211,13 +217,23 @@ def convert_docx_to_pdf(docx_file, pdf_path):
         logger.error(f"Error converting DOCX to PDF: {e}")
         raise
 
-async def send_pdf_to_channel(pdf_path, caption):
+async def send_pdf_to_channel(pdf_path, caption, collection_name, quiz_number):
+    attractive_caption = (
+        f"🎉 *{collection_name} Quiz {quiz_number} is now available!* 🎉\n\n"
+        f"📚 Boost your knowledge with our latest quiz.\n"
+        f"🧠 Challenge yourself and learn something new!\n\n"
+        f"📥 Download the PDF and start quizzing.\n"
+        f"🔗 Don't forget to join @CurrentAdda for daily updates!\n\n"
+        f"#Quiz #{collection_name.replace(' ', '')}"
+    )
+    
     try:
         with open(pdf_path, 'rb') as pdf_file:
             await bot.send_document(
                 chat_id=DEFAULT_CHANNEL,
                 document=pdf_file,
-                caption=caption
+                caption=attractive_caption,
+                parse_mode=ParseMode.MARKDOWN
             )
         logger.info(f"PDF sent successfully")
     except TelegramError as e:
@@ -264,7 +280,7 @@ async def main():
     pdf_path = os.path.join(tempfile.gettempdir(), f'{selected_collection} Quiz {quiz_number}.pdf')
     
     convert_docx_to_pdf(updated_doc_path, pdf_path)
-    await send_pdf_to_channel(pdf_path, f"{selected_collection} Quiz {quiz_number} - {datetime.now().strftime('%d %B %Y')}")
+    await send_pdf_to_channel(pdf_path, f"{selected_collection} Quiz {quiz_number} - {datetime.now().strftime('%d %B %Y')}", selected_collection, quiz_number)
 
 if __name__ == "__main__":
     asyncio.run(main())
