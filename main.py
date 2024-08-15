@@ -20,15 +20,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Read environment variables
-mongo_uri = os.getenv('MONGO_URI')
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-DEFAULT_CHANNEL = os.getenv('DEFAULT_CHANNEL')
+mongo_uri = os.getenv('MONGO_CONNECTION_STRING')
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+DEFAULT_CHANNEL = os.getenv('TELEGRAM_CHANNEL_USERNAME')
 TEMPLATE_URL = os.getenv('TEMPLATE_URL', 'https://docs.google.com/document/d/12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD/edit?usp=sharing&ouid=108520131839767724661&rtpof=true&sd=true')
+
+# Debug logging for environment variables
+logger.info(f"Bot Token: {BOT_TOKEN}")
+logger.info(f"Telegram Channel: {DEFAULT_CHANNEL}")
+logger.info(f"Mongo URI: {mongo_uri}")
 
 # Initialize MongoDB client and Telegram bot
 client = MongoClient(mongo_uri)
 bot = Bot(token=BOT_TOKEN)
 
+# Define functions for the bot
 def fetch_collections(database_name):
     db = client[database_name]
     return db.list_collection_names()
