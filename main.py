@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 mongo_uri = os.getenv('MONGO_URI')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 DEFAULT_CHANNEL = os.getenv('DEFAULT_CHANNEL')
-TEMPLATE_URL = os.getenv('TEMPLATE_URL')
+TEMPLATE_URL = os.getenv('TEMPLATE_URL','https://drive.google.com/uc?export=download&id=12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD')
 
 # Initialize MongoDB client and Telegram bot
 client = MongoClient(mongo_uri)
