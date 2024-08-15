@@ -80,12 +80,26 @@ def get_quiz_number(collection_name):
         collection.insert_one({'collection_name': collection_name, 'count': 1})
         return 1
 
-async def send_intro_message(collection_name, num_questions, quiz_number):
+def get_overall_quiz_number():
+    db = client['QuizCounters']
+    collection = db['OverallCounter']
+    counter_record = collection.find_one({'counter_name': 'overall_quiz'})
+    
+    if counter_record:
+        new_count = counter_record['count'] + 1
+        collection.update_one({'counter_name': 'overall_quiz'}, {'$set': {'count': new_count}})
+        return new_count
+    else:
+        collection.insert_one({'counter_name': 'overall_quiz', 'count': 1})
+        return 1
+
+async def send_intro_message(collection_name, num_questions, quiz_number, overall_quiz_number):
     day = get_quiz_day()
     intro_message = (
         f"🎯 *આજની કવિઝ - Day {day} - {collection_name} Quiz {quiz_number}* 🎯\n\n"
         f"📚 વિષય: *{collection_name}*\n"
-        f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n\n"
+        f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n"
+        f"🔢 કવિઝ નંબર: *{overall_quiz_number}*\n\n"
         f"🕐 અમારા ટેલીગ્રામ ચેનલમાં દરરોજ બપોરે *1 વાગ્યે* અને રાત્રે *9 વાગ્યે* "
         f"*{num_questions}* પ્રશ્નોની કવિઝ મુકવામાં આવે છે.\n\n"
         f"🔗 *Join* : @CurrentAdda\n\n"
@@ -132,6 +146,7 @@ def download_template(url):
     except requests.exceptions.RequestException as e:
         logger.error(f"Error downloading template: {e}")
         raise
+
 def update_document_with_content(doc_io, intro_message, questions, collection_name, quiz_number):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_docx_file:
         temp_docx_file.write(doc_io.read())
@@ -217,14 +232,14 @@ def convert_docx_to_pdf(docx_file, pdf_path):
         logger.error(f"Error converting DOCX to PDF: {e}")
         raise
 
-async def send_pdf_to_channel(pdf_path, caption, collection_name, quiz_number):
+async def send_pdf_to_channel(pdf_path, caption, collection_name, quiz_number, overall_quiz_number):
     attractive_caption = (
-        f"🎉 *{collection_name} Quiz {quiz_number} is now available!* 🎉\n\n"
+        f"🎉 *{collection_name} Quiz {quiz_number} (Overall Quiz {overall_quiz_number}) is now available!* 🎉\n\n"
         f"📚 Boost your knowledge with our latest quiz.\n"
         f"🧠 Challenge yourself and learn something new!\n\n"
         f"📥 Download the PDF and start quizzing.\n"
         f"🔗 Don't forget to join @CurrentAdda for daily updates!\n\n"
-        f"#Quiz #{collection_name.replace(' ', '')}"
+        f"#Quiz #{collection_name.replace(' ', '')} #Quiz{overall_quiz_number}"
     )
     
     try:
@@ -251,17 +266,19 @@ async def main():
     questions = fetch_questions_from_collection('MasterQuestions', selected_collection, num_questions)
     
     quiz_number = get_quiz_number(selected_collection)
+    overall_quiz_number = get_overall_quiz_number()
     
     intro_message = (
         f"🎯 *Day {get_quiz_day()} - {selected_collection} Quiz {quiz_number}* 🎯\n\n"
         f"📚 *Quiz Collection*: {selected_collection}\n"
-        f"🔢 *Number of Questions*: {num_questions}\n\n"
+        f"🔢 *Number of Questions*: {num_questions}\n"
+        f"🔢 *Overall Quiz Number*: {overall_quiz_number}\n\n"
         f"🕐 Daily quizzes are posted at *1 PM* and *9 PM*.\n\n"
         f"🔗 *Join*: @CurrentAdda\n\n"
         f"🏆 Get ready for your quiz! 🚀"
     )
     
-    await send_intro_message(selected_collection, num_questions, quiz_number)
+    await send_intro_message(selected_collection, num_questions, quiz_number, overall_quiz_number)
     await asyncio.sleep(5)
     
     for question in questions:
@@ -277,10 +294,10 @@ async def main():
     
     template_io = download_template(TEMPLATE_URL)
     updated_doc_path = update_document_with_content(template_io, intro_message, questions, selected_collection, quiz_number)
-    pdf_path = os.path.join(tempfile.gettempdir(), f'{selected_collection} Quiz {quiz_number}.pdf')
+    pdf_path = os.path.join(tempfile.gettempdir(), f'{selected_collection} Quiz {quiz_number} - Overall {overall_quiz_number}.pdf')
     
     convert_docx_to_pdf(updated_doc_path, pdf_path)
-    await send_pdf_to_channel(pdf_path, f"{selected_collection} Quiz {quiz_number} - {datetime.now().strftime('%d %B %Y')}", selected_collection, quiz_number)
+    await send_pdf_to_channel(pdf_path, f"{selected_collection} Quiz {quiz_number} - Overall {overall_quiz_number} - {datetime.now().strftime('%d %B %Y')}", selected_collection, quiz_number, overall_quiz_number)
 
 if __name__ == "__main__":
     asyncio.run(main())
