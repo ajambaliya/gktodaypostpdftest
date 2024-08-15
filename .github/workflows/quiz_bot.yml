@@ -38,5 +38,6 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         TELEGRAM_CHANNEL_USERNAME: ${{ secrets.DEFAULT_CHANNEL }}
         MONGO_CONNECTION_STRING: ${{ secrets.MONGO_URI }}
+        TEMPLATE_URL: ${{ secrets.TEMPLATE_URL }}
       run: |
         python main.py
