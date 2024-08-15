@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 mongo_uri = os.getenv('MONGO_URI')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 DEFAULT_CHANNEL = os.getenv('DEFAULT_CHANNEL')
-TEMPLATE_URL = os.getenv('TEMPLATE_URL','https://docs.google.com/document/d/12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD/edit?usp=sharing&ouid=108520131839767724661&rtpof=true&sd=true')
+TEMPLATE_URL = os.getenv('TEMPLATE_URL')
 
 # Initialize MongoDB client and Telegram bot
 client = MongoClient(mongo_uri)
@@ -114,10 +114,15 @@ async def send_quiz_to_channel(question, options, correct_option_index, explanat
         print(f"Error sending quiz: {e}")
 
 def fetch_template():
-    response = requests.get(TEMPLATE_URL)
-    with open("template-quiz.docx", "wb") as file:
-        file.write(response.content)
-    return "template.docx"
+    try:
+        response = requests.get(TEMPLATE_URL)
+        response.raise_for_status()  # Raises an error for HTTP issues
+        with open("template.docx", "wb") as file:
+            file.write(response.content)
+        return "template-quiz.docx"
+    except requests.exceptions.RequestException as e:
+        print(f"Error downloading the template: {e}")
+        return None
 
 def update_document_with_content(doc_path, intro_message, questions):
     doc = Document(doc_path)
