@@ -117,11 +117,20 @@ def insert_content_between_placeholders(doc, content_list):
         start_placeholder = end_placeholder = None
         
         for i, para in enumerate(doc.text.getElementsByType(P)):
+            if para.firstChild is None:
+                logging.warning(f"Empty paragraph found at index {i}")
+                continue
+            if para.firstChild.data is None:
+                logging.warning(f"Paragraph at index {i} has no data")
+                continue
             if "START_CONTENT" in para.firstChild.data:
                 start_placeholder = i
             elif "END_CONTENT" in para.firstChild.data:
                 end_placeholder = i
                 break
+        
+        if start_placeholder is None or end_placeholder is None:
+            raise ContentInsertionError("Could not find both placeholders")
         
         if start_placeholder is None or end_placeholder is None:
             raise ContentInsertionError("Could not find both placeholders")
@@ -151,7 +160,13 @@ def insert_content_between_placeholders(doc, content_list):
     except Exception as e:
         logging.error(f"Error inserting content into ODT document: {e}")
         raise
-
+    except AttributeError as e:
+        logging.error(f"AttributeError in insert_content_between_placeholders: {e}")
+        raise ContentInsertionError("Error accessing paragraph data")
+    except Exception as e:
+        logging.error(f"Error inserting content into ODT document: {e}")
+        raise
+        
 def download_template(url):
     try:
         # Use direct download link format
