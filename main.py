@@ -1,10 +1,9 @@
-import io
 import os
+import io
 import requests
 from bs4 import BeautifulSoup
 from odf.opendocument import load
-from odf.text import H, P, List, Span
-from odf.element import Element
+from odf.text import H, P, Span
 from datetime import datetime
 import pymongo
 from deep_translator import GoogleTranslator, exceptions
@@ -18,16 +17,15 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # MongoDB setup
-DB_NAME = os.environ.get('DB_NAME')
-COLLECTION_NAME = os.environ.get('COLLECTION_NAME')
-MONGO_CONNECTION_STRING = os.environ.get('MONGO_CONNECTION_STRING')
+DB_NAME = os.getenv('DB_NAME')
+COLLECTION_NAME = os.getenv('COLLECTION_NAME')
+MONGO_CONNECTION_STRING = os.getenv('MONGO_CONNECTION_STRING')
 
 if not all([DB_NAME, COLLECTION_NAME, MONGO_CONNECTION_STRING]):
     raise ValueError("One or more required MongoDB environment variables are not set")
 
 client = pymongo.MongoClient(MONGO_CONNECTION_STRING)
-db = client[DB_NAME]
-collection = db[COLLECTION_NAME]
+collection = client[DB_NAME][COLLECTION_NAME]
 
 class DownloadError(Exception):
     pass
@@ -35,15 +33,8 @@ class DownloadError(Exception):
 class ConversionError(Exception):
     pass
 
-class ContentInsertionError(Exception):
-    pass
-
-class TelegramSendError(Exception):
-    pass
-
 def fetch_article_urls(base_url, pages):
     article_urls = []
-    logging.info(f"Fetching article URLs from {base_url} across {pages} pages")
     for page in range(1, pages + 1):
         url = base_url if page == 1 else f"{base_url}page/{page}/"
         try:
@@ -77,37 +68,28 @@ async def scrape_and_get_content(url):
         main_content = soup.find('div', class_='inside_post column content_width')
         if not main_content:
             raise Exception("Main content div not found")
-        
+
         heading = main_content.find('h1', id='list')
         if not heading:
             raise Exception("Heading not found")
-        
+
         content_list = []
         heading_text = heading.get_text()
         translated_heading = translate_to_gujarati(heading_text)
         content_list.append({'type': 'heading', 'text': translated_heading})
-        content_list.append({'type': 'heading', 'text': heading_text})
-        
+
         for tag in main_content.find_all(recursive=False):
-            if tag.get('class') in [['sharethis-inline-share-buttons', 'st-center', 'st-has-labels', 'st-inline-share-buttons', 'st-animated'], ['prenext']]:
+            if tag.get('class') in [['sharethis-inline-share-buttons'], ['prenext']]:
                 continue
             text = tag.get_text()
             translated_text = translate_to_gujarati(text)
-            if tag.name == 'p':
-                content_list.append({'type': 'paragraph', 'text': translated_text})
-                content_list.append({'type': 'paragraph', 'text': text})
-            elif tag.name == 'h2':
-                content_list.append({'type': 'heading_2', 'text': translated_text})
-                content_list.append({'type': 'heading_2', 'text': text})
-            elif tag.name == 'h4':
-                content_list.append({'type': 'heading_4', 'text': translated_text})
-                content_list.append({'type': 'heading_4', 'text': text})
+            if tag.name in ['p', 'h2', 'h4']:
+                content_list.append({'type': tag.name, 'text': translated_text})
             elif tag.name == 'ul':
                 for li in tag.find_all('li'):
                     li_text = li.get_text()
                     translated_li_text = translate_to_gujarati(li_text)
                     content_list.append({'type': 'list_item', 'text': f"• {translated_li_text}"})
-                    content_list.append({'type': 'list_item', 'text': f"• {li_text}"})
         return content_list
     except Exception as e:
         logging.error(f"Error scraping content from {url}: {e}")
@@ -115,79 +97,41 @@ async def scrape_and_get_content(url):
 
 def insert_content_between_placeholders(doc, content_list):
     try:
-        logging.info("Starting to insert content between placeholders")
-        logging.info(f"Number of content items: {len(content_list)}")
-        logging.info(f"Types of content: {[content['type'] for content in content_list]}")
         start_placeholder = end_placeholder = None
         
         for i, para in enumerate(doc.text.getElementsByType(P)):
-            para_text = ""
-            for element in para.childNodes:
-                if isinstance(element, Element):
-                    # Check if the element has a text attribute or method
-                    if hasattr(element, 'text'):
-                        para_text += element.text
-                    elif hasattr(element, 'getAttribute'):
-                        para_text += element.getAttribute('text') or ''
-                elif hasattr(element, 'data'):
-                    para_text += element.data
-            
+            para_text = "".join([element.text if hasattr(element, 'text') else '' for element in para.childNodes])
             if "START_CONTENT" in para_text:
                 start_placeholder = i
             elif "END_CONTENT" in para_text:
                 end_placeholder = i
                 break
-        
+
         if start_placeholder is None or end_placeholder is None:
-            raise ContentInsertionError("Could not find both placeholders")
-        
-        logging.info("Removing existing content between placeholders")
+            raise Exception("Could not find both placeholders")
+
         for i in range(end_placeholder - 1, start_placeholder, -1):
             doc.text.removeElement(doc.text.getElementsByType(P)[i])
-        
-        logging.info("Inserting new content between placeholders")
-        content_list = content_list[::-1]
-        
+
+        content_list.reverse()
         for content in content_list:
-            try:
-            if content['type'] == 'heading':
-                h = H(outlinelevel=1)
-                h.addElement(Span(text=content['text']))
-                doc.text.insertBefore(h, doc.text.getElementsByType(P)[start_placeholder + 1])
-            elif content['type'] in ['paragraph', 'list_item']:
-                p = P()
-                p.addElement(Span(text=content['text']))
-                doc.text.insertBefore(p, doc.text.getElementsByType(P)[start_placeholder + 1])
-            elif content['type'] == 'heading_2':
-                h = H(outlinelevel=2)
-                h.addElement(Span(text=content['text']))
-                doc.text.insertBefore(h, doc.text.getElementsByType(P)[start_placeholder + 1])
-            elif content['type'] == 'heading_4':
-                h = H(outlinelevel=4)
-                h.addElement(Span(text=content['text']))
-                doc.text.insertBefore(h, doc.text.getElementsByType(P)[start_placeholder + 1])
-        except Exception as e:
-            logging.error(f"Error inserting content of type {content['type']}: {e}")
-            raise
-        
-        logging.info("Clearing placeholder text")
+            p = P()
+            p.addElement(Span(text=content['text']))
+            doc.text.insertBefore(p, doc.text.getElementsByType(P)[start_placeholder + 1])
+
         doc.text.getElementsByType(P)[start_placeholder].setTextContent("")
         doc.text.getElementsByType(P)[end_placeholder].setTextContent("")
     except Exception as e:
         logging.error(f"Error inserting content into ODT document: {e}")
         raise
-        
+
 def download_template(url):
     try:
         download_url = url.replace('/edit?usp=sharing', '/uc?export=download')
-        logging.info(f"Downloading template from {download_url}")
         response = requests.get(download_url)
         response.raise_for_status()
-        
         if not response.content:
             raise DownloadError("Downloaded file is empty")
-        
-        logging.info(f"Template downloaded successfully, size: {len(response.content)} bytes")
         return io.BytesIO(response.content)
     except requests.RequestException as e:
         logging.error(f"Error downloading template: {e}")
@@ -195,7 +139,6 @@ def download_template(url):
 
 def check_and_insert_urls(urls):
     new_urls = []
-    logging.info("Checking and inserting URLs")
     for url in urls:
         if 'daily-current-affairs-quiz' in url:
             continue
@@ -206,18 +149,13 @@ def check_and_insert_urls(urls):
 
 def convert_odt_to_pdf(odt_path, pdf_path):
     try:
-        logging.info(f"Converting ODT file {odt_path} to PDF at {pdf_path}")
         result = subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
                                 os.path.dirname(pdf_path), odt_path], 
                                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logging.info(f"Conversion output: {result.stdout.decode()}")
-        logging.error(f"Conversion errors: {result.stderr.decode()}")
-        
         original_pdf = os.path.splitext(os.path.basename(odt_path))[0] + '.pdf'
         original_pdf_path = os.path.join(os.path.dirname(pdf_path), original_pdf)
         if not os.path.exists(original_pdf_path):
             raise ConversionError(f"Converted PDF file does not exist at {original_pdf_path}")
-        
         os.rename(original_pdf_path, pdf_path)
     except subprocess.CalledProcessError as e:
         logging.error(f"Error converting ODT to PDF: {e}")
@@ -226,7 +164,6 @@ def convert_odt_to_pdf(odt_path, pdf_path):
 def rename_pdf(pdf_path, new_name):
     try:
         new_pdf_path = os.path.join(os.path.dirname(pdf_path), new_name)
-        logging.info(f"Renaming PDF file to {new_pdf_path}")
         os.rename(pdf_path, new_pdf_path)
         return new_pdf_path
     except OSError as e:
@@ -238,7 +175,6 @@ async def send_pdf_to_telegram(pdf_path, bot_token, channel_id, caption):
         bot = telegram.Bot(token=bot_token)
         with open(pdf_path, 'rb') as pdf_file:
             await bot.send_document(chat_id=channel_id, document=pdf_file, caption=caption)
-        logging.info("PDF sent to Telegram successfully")
     except Exception as e:
         logging.error(f"Error sending PDF to Telegram: {e}")
         raise
@@ -248,24 +184,21 @@ async def main():
         base_url = 'https://www.gktoday.in/current-affairs/'
         pages = 2
         template_url = 'https://drive.google.com/uc?export=download&id=1Qr96XcaRrmODZl4tvxhcZkneebj9OpGO'
-
-        urls = fetch_article_urls(base_url, pages)
-        new_urls = check_and_insert_urls(urls)
+        bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        channel_id = os.getenv('TELEGRAM_CHANNEL_ID')
+        caption = "Generated PDF document"
         
-        bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
-        channel_id = os.environ.get('TELEGRAM_CHANNEL_ID')
         if not all([bot_token, channel_id]):
             raise ValueError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHANNEL_ID environment variable is not set")
         
-        caption = "Generated PDF document"
-        
+        urls = fetch_article_urls(base_url, pages)
+        new_urls = check_and_insert_urls(urls)
+
         for url in new_urls:
-            logging.info(f"Processing URL: {url}")
             content_list = await scrape_and_get_content(url)
-            
+
             with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as odt_file:
                 odt_file_path = odt_file.name
-                logging.info(f"Creating temporary ODT file at {odt_file_path}")
                 template = download_template(template_url)
                 with open(odt_file_path, 'wb') as file:
                     file.write(template.read())
@@ -273,19 +206,19 @@ async def main():
                 doc = load(odt_file_path)
                 insert_content_between_placeholders(doc, content_list)
                 doc.save(odt_file_path)
-                
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as pdf_file:
                     pdf_file_path = pdf_file.name
                     convert_odt_to_pdf(odt_file_path, pdf_file_path)
-                    
+
                     new_pdf_name = f"Article_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
                     final_pdf_path = rename_pdf(pdf_file_path, new_pdf_name)
-                    
+
                     await send_pdf_to_telegram(final_pdf_path, bot_token, channel_id, caption)
-                    
+
                 os.remove(odt_file_path)
                 os.remove(final_pdf_path)
-            
+
             logging.info(f"Finished processing URL: {url}")
     except Exception as e:
         logging.error(f"Error in main execution: {e}")
