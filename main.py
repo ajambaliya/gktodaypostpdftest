@@ -3,7 +3,8 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from odf.opendocument import load
-from odf.text import H, P, List
+from odf.text import H, P, List, Span
+from odf.element import Element
 from datetime import datetime
 import pymongo
 from deep_translator import GoogleTranslator, exceptions
@@ -117,20 +118,18 @@ def insert_content_between_placeholders(doc, content_list):
         start_placeholder = end_placeholder = None
         
         for i, para in enumerate(doc.text.getElementsByType(P)):
-            if para.firstChild is None:
-                logging.warning(f"Empty paragraph found at index {i}")
-                continue
-            if para.firstChild.data is None:
-                logging.warning(f"Paragraph at index {i} has no data")
-                continue
-            if "START_CONTENT" in para.firstChild.data:
+            para_text = ""
+            for element in para.childNodes:
+                if isinstance(element, Element):
+                    para_text += element.text
+                elif hasattr(element, 'data'):
+                    para_text += element.data
+            
+            if "START_CONTENT" in para_text:
                 start_placeholder = i
-            elif "END_CONTENT" in para.firstChild.data:
+            elif "END_CONTENT" in para_text:
                 end_placeholder = i
                 break
-        
-        if start_placeholder is None or end_placeholder is None:
-            raise ContentInsertionError("Could not find both placeholders")
         
         if start_placeholder is None or end_placeholder is None:
             raise ContentInsertionError("Could not find both placeholders")
@@ -144,32 +143,31 @@ def insert_content_between_placeholders(doc, content_list):
         
         for content in content_list:
             if content['type'] == 'heading':
-                doc.text.addElement(H(level=1, text=content['text']))
-            elif content['type'] == 'paragraph':
-                doc.text.addElement(P(text=content['text']))
+                h = H(outlinelevel=1)
+                h.addElement(Span(text=content['text']))
+                doc.text.insertBefore(h, doc.text.getElementsByType(P)[start_placeholder + 1])
+            elif content['type'] in ['paragraph', 'list_item']:
+                p = P()
+                p.addElement(Span(text=content['text']))
+                doc.text.insertBefore(p, doc.text.getElementsByType(P)[start_placeholder + 1])
             elif content['type'] == 'heading_2':
-                doc.text.addElement(H(level=2, text=content['text']))
+                h = H(outlinelevel=2)
+                h.addElement(Span(text=content['text']))
+                doc.text.insertBefore(h, doc.text.getElementsByType(P)[start_placeholder + 1])
             elif content['type'] == 'heading_4':
-                doc.text.addElement(H(level=4, text=content['text']))
-            elif content['type'] == 'list_item':
-                doc.text.addElement(List(text=content['text']))
+                h = H(outlinelevel=4)
+                h.addElement(Span(text=content['text']))
+                doc.text.insertBefore(h, doc.text.getElementsByType(P)[start_placeholder + 1])
         
         logging.info("Clearing placeholder text")
-        doc.text.getElementsByType(P)[start_placeholder].setAttribute('text', "")
-        doc.text.getElementsByType(P)[end_placeholder].setAttribute('text', "")
+        doc.text.getElementsByType(P)[start_placeholder].setTextContent("")
+        doc.text.getElementsByType(P)[end_placeholder].setTextContent("")
     except Exception as e:
         logging.error(f"Error inserting content into ODT document: {e}")
         raise
-    except AttributeError as e:
-        logging.error(f"AttributeError in insert_content_between_placeholders: {e}")
-        raise ContentInsertionError("Error accessing paragraph data")
-    except Exception as e:
-        logging.error(f"Error inserting content into ODT document: {e}")
-        raise
-        
+
 def download_template(url):
     try:
-        # Use direct download link format
         download_url = url.replace('/edit?usp=sharing', '/uc?export=download')
         logging.info(f"Downloading template from {download_url}")
         response = requests.get(download_url)
@@ -178,6 +176,7 @@ def download_template(url):
         if not response.content:
             raise DownloadError("Downloaded file is empty")
         
+        logging.info(f"Template downloaded successfully, size: {len(response.content)} bytes")
         return io.BytesIO(response.content)
     except requests.RequestException as e:
         logging.error(f"Error downloading template: {e}")
@@ -250,6 +249,7 @@ async def main():
         caption = "Generated PDF document"
         
         for url in new_urls:
+            logging.info(f"Processing URL: {url}")
             content_list = await scrape_and_get_content(url)
             
             with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as odt_file:
@@ -261,6 +261,7 @@ async def main():
 
                 doc = load(odt_file_path)
                 insert_content_between_placeholders(doc, content_list)
+                doc.save(odt_file_path)
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as pdf_file:
                     pdf_file_path = pdf_file.name
@@ -273,6 +274,8 @@ async def main():
                     
                 os.remove(odt_file_path)
                 os.remove(final_pdf_path)
+            
+            logging.info(f"Finished processing URL: {url}")
     except Exception as e:
         logging.error(f"Error in main execution: {e}")
 
