@@ -201,13 +201,17 @@ async def main():
     try:
         base_url = "https://www.gktoday.in/current-affairs/"
         article_urls = fetch_article_urls(base_url, 2)
-        
+
         # Add a hardcoded test URL for guaranteed processing
         test_url = "https://www.gktoday.in/bengaluru-researchers-discover-three-new-edible-bug-species/"
         article_urls.append(test_url)
         
+        print(f"Extracted URLs: {article_urls}")  # Debugging
+
         new_urls = check_and_insert_urls(article_urls)
-        
+
+        print(f"New URLs to process: {new_urls}")  # Debugging
+
         if not new_urls:
             print("No new URLs found.")
             return
@@ -220,6 +224,8 @@ async def main():
         doc = load(template_bytes)
 
         content_lists = await asyncio.gather(*[scrape_and_get_content(url) for url in new_urls])
+
+        print(f"Content lists: {content_lists}")  # Debugging
 
         for content_list in content_lists:
             insert_content_between_placeholders(doc, content_list)
