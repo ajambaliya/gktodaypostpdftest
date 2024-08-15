@@ -1,23 +1,29 @@
 import os
-import pymongo
 import asyncio
+import requests
+import logging
 from telegram import Bot
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 from pymongo import MongoClient
 import random
-import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-import pdfkit
-import requests
+import io
+import subprocess
+import tempfile
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Read environment variables
 mongo_uri = os.getenv('MONGO_URI')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 DEFAULT_CHANNEL = os.getenv('DEFAULT_CHANNEL')
-TEMPLATE_URL = os.getenv('TEMPLATE_URL', 'https://drive.google.com/uc?export=download&id=12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD')
+TEMPLATE_URL = os.getenv('TEMPLATE_URL', 'https://docs.google.com/document/d/12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD/edit?usp=sharing&ouid=108520131839767724661&rtpof=true&sd=true')
 
 # Initialize MongoDB client and Telegram bot
 client = MongoClient(mongo_uri)
@@ -40,10 +46,9 @@ def get_correct_option_index(answer_key):
 def get_quiz_day():
     db = client['QuizDays']
     collection = db['Days']
-    today = datetime.now().date()  # Get today's date
-    today_datetime = datetime.combine(today, datetime.min.time())  # Convert date to datetime
+    today = datetime.now().date()
+    today_datetime = datetime.combine(today, datetime.min.time())
 
-    # Find a record for today
     day_record = collection.find_one({'date': today_datetime})
     
     if day_record:
@@ -52,7 +57,6 @@ def get_quiz_day():
         last_day_record = collection.find_one(sort=[('date', pymongo.DESCENDING)])
         new_day = 1 if not last_day_record else last_day_record['day'] + 1
         
-        # Store today’s date as datetime
         collection.insert_one({'date': today_datetime, 'day': new_day})
         return new_day
 
@@ -87,9 +91,9 @@ async def send_intro_message(collection_name, num_questions):
             text=intro_message,
             parse_mode=ParseMode.MARKDOWN
         )
-        print("Intro message sent successfully")
-    except Exception as e:
-        print(f"Error sending intro message: {e}")
+        logger.info("Intro message sent successfully")
+    except TelegramError as e:
+        logger.error(f"Error sending intro message: {e}")
 
 async def send_quiz_to_channel(question, options, correct_option_index, explanation):
     question_text = f"{question}\n[@CurrentAdda]"
@@ -108,24 +112,22 @@ async def send_quiz_to_channel(question, options, correct_option_index, explanat
             is_anonymous=True,
             allows_multiple_answers=False,
         )
-        print(f"Quiz sent successfully: {question}")
-    except Exception as e:
-        print(f"Error sending quiz: {e}")
+        logger.info(f"Quiz sent successfully: {question}")
+    except TelegramError as e:
+        logger.error(f"Error sending quiz: {e}")
 
-def fetch_template():
+def download_template(url):
+    download_url = url.replace('/edit?usp=sharing', '/export?format=docx')
     try:
-        response = requests.get(TEMPLATE_URL)
+        response = requests.get(download_url)
         response.raise_for_status()
-        with open("template.docx", "wb") as file:
-            file.write(response.content)
-        return "template.docx"
+        return io.BytesIO(response.content)
     except requests.exceptions.RequestException as e:
-        print(f"Error downloading the template: {e}")
-        return None
+        logger.error(f"Error downloading template: {e}")
+        raise
 
-def update_document_with_content(doc_path, intro_message, questions):
-    doc = Document(doc_path)
-    
+def update_document_with_content(doc, intro_message, questions):
+    doc = Document(io.BytesIO(doc))  # Convert BytesIO to Document
     # Insert intro message
     for paragraph in doc.paragraphs:
         if '<<START_CONTENT>>' in paragraph.text:
@@ -138,28 +140,53 @@ def update_document_with_content(doc_path, intro_message, questions):
     for paragraph in doc.paragraphs:
         if '<<END_CONTENT>>' in paragraph.text:
             for q in questions:
-                question_paragraph = doc.add_paragraph(f"{q['Question']}")
+                question_paragraph = doc.add_paragraph(f"{q['question']}")
                 question_paragraph.style.font.size = Pt(10)
             break
     
-    doc.save(doc_path)
+    return doc
 
-def convert_to_pdf(doc_path, pdf_name):
-    pdfkit.from_file(doc_path, pdf_name)
+def convert_docx_to_pdf(docx_file, pdf_path):
+    try:
+        output_dir = os.path.dirname(pdf_path)
+        result = subprocess.run(
+            ['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', output_dir, docx_file],
+            check=True, capture_output=True, text=True
+        )
+        logger.info(f"LibreOffice conversion output: {result.stdout}")
+        logger.error(f"LibreOffice conversion error output: {result.stderr}")
+        
+        pdf_temp_path = os.path.join(output_dir, os.path.splitext(os.path.basename(docx_file))[0] + '.pdf')
+        if os.path.exists(pdf_temp_path):
+            os.rename(pdf_temp_path, pdf_path)
+            logger.info(f"Successfully converted DOCX to PDF: {pdf_path}")
+        else:
+            raise FileNotFoundError(f"PDF file not found at expected location: {pdf_temp_path}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"LibreOffice conversion failed: {e}")
+        logger.error(f"LibreOffice stderr: {e.stderr}")
+        raise
+    except Exception as e:
+        logger.error(f"Error converting DOCX to PDF: {e}")
+        raise
 
 async def send_pdf_to_channel(pdf_path, caption):
     try:
         with open(pdf_path, 'rb') as pdf_file:
-            await bot.send_document(chat_id=DEFAULT_CHANNEL, document=pdf_file, caption=caption)
-        print("PDF sent successfully")
-    except Exception as e:
-        print(f"Error sending PDF: {e}")
+            await bot.send_document(
+                chat_id=DEFAULT_CHANNEL,
+                document=pdf_file,
+                caption=caption
+            )
+        logger.info(f"PDF sent successfully")
+    except TelegramError as e:
+        logger.error(f"Failed to send PDF: {e.message}")
 
 async def main():
     collections = fetch_collections('MasterQuestions')
     
     if not collections:
-        print("No collections found in the database.")
+        logger.info("No collections found in the database.")
         return
     
     selected_collection = random.choice(collections)
@@ -180,25 +207,26 @@ async def main():
             await send_quiz_to_channel(question_text, options, correct_option_index, explanation)
             await asyncio.sleep(3)
     
-    template_path = fetch_template()
-    if not template_path:
-        return  # Exit if the template could not be downloaded
-    
+    template_io = download_template(TEMPLATE_URL)
     intro_message = (
         f"🎯 *Day {get_quiz_day()}* 🎯\n\n"
         f"📚 વિષય: *{selected_collection}*\n"
         f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n"
-        f"🔗 *Join* : @CurrentAdda\n\n"
     )
     
-    update_document_with_content(template_path, intro_message, questions)
+    doc = update_document_with_content(template_io, intro_message, questions)
+    
+    temp_docx_path = os.path.join(tempfile.gettempdir(), 'template-quiz.docx')
+    doc.save(temp_docx_path)
     
     pdf_count = update_quiz_counter(selected_collection)
     pdf_name = f"{selected_collection} Quiz {pdf_count}.pdf"
-    convert_to_pdf(template_path, pdf_name)
+    pdf_path = os.path.join(tempfile.gettempdir(), pdf_name)
     
-    caption = f"📄 *{selected_collection} Quiz {pdf_count}* - Day {get_quiz_day()}\n\nJoin our channel for more quizzes! @CurrentAdda"
-    await send_pdf_to_channel(pdf_name, caption)
+    convert_docx_to_pdf(temp_docx_path, pdf_path)
+    
+    caption = f"📄 *{selected_collection} Quiz {pdf_count}* - Day {get_quiz_day()}\n\nJoin our channel for more quizzes!"
+    await send_pdf_to_channel(pdf_path, caption)
 
 if __name__ == "__main__":
     asyncio.run(main())
