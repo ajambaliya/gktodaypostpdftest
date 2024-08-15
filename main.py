@@ -7,7 +7,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from pymongo import MongoClient
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
@@ -126,16 +126,28 @@ def download_template(url):
         logger.error(f"Error downloading template: {e}")
         raise
 
-def update_document_with_content(doc, intro_message, questions):
-    doc = Document(io.BytesIO(doc))  # Convert BytesIO to Document
+def update_document_with_content(doc_io, intro_message, questions):
+    # Save the BytesIO object to a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_docx_file:
+        temp_docx_file.write(doc_io.read())
+        temp_docx_path = temp_docx_file.name
+    
+    # Load the document from the temporary file
+    doc = Document(temp_docx_path)
+    
     # Insert intro message
+    intro_found = False
     for paragraph in doc.paragraphs:
         if '<<START_CONTENT>>' in paragraph.text:
             paragraph.text = intro_message
             paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
             paragraph.style.font.size = Pt(12)
+            intro_found = True
             break
-    
+
+    if not intro_found:
+        logger.warning("No <<START_CONTENT>> placeholder found in the document.")
+
     # Insert questions
     for paragraph in doc.paragraphs:
         if '<<END_CONTENT>>' in paragraph.text:
@@ -143,8 +155,12 @@ def update_document_with_content(doc, intro_message, questions):
                 question_paragraph = doc.add_paragraph(f"{q['question']}")
                 question_paragraph.style.font.size = Pt(10)
             break
+
+    # Save the updated document to a temporary file
+    updated_doc_path = os.path.join(tempfile.gettempdir(), 'updated-template.docx')
+    doc.save(updated_doc_path)
     
-    return doc
+    return updated_doc_path
 
 def convert_docx_to_pdf(docx_file, pdf_path):
     try:
@@ -210,23 +226,17 @@ async def main():
     template_io = download_template(TEMPLATE_URL)
     intro_message = (
         f"🎯 *Day {get_quiz_day()}* 🎯\n\n"
-        f"📚 વિષય: *{selected_collection}*\n"
-        f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n"
+        f"📚 *Quiz Collection*: {selected_collection}\n"
+        f"🔢 *Number of Questions*: {num_questions}\n\n"
+        f"🕐 Daily quizzes are posted at *1 PM* and *9 PM*.\n\n"
+        f"🔗 *Join*: @CurrentAdda\n\n"
+        f"🏆 Get ready for your quiz! 🚀"
     )
+    updated_doc_path = update_document_with_content(template_io, intro_message, questions)
+    pdf_path = os.path.join(tempfile.gettempdir(), f'{datetime.now().strftime("%d %B %Y")} Current Affairs.pdf')
     
-    doc = update_document_with_content(template_io, intro_message, questions)
-    
-    temp_docx_path = os.path.join(tempfile.gettempdir(), 'template-quiz.docx')
-    doc.save(temp_docx_path)
-    
-    pdf_count = update_quiz_counter(selected_collection)
-    pdf_name = f"{selected_collection} Quiz {pdf_count}.pdf"
-    pdf_path = os.path.join(tempfile.gettempdir(), pdf_name)
-    
-    convert_docx_to_pdf(temp_docx_path, pdf_path)
-    
-    caption = f"📄 *{selected_collection} Quiz {pdf_count}* - Day {get_quiz_day()}\n\nJoin our channel for more quizzes!"
-    await send_pdf_to_channel(pdf_path, caption)
+    convert_docx_to_pdf(updated_doc_path, pdf_path)
+    await send_pdf_to_channel(pdf_path, f"Daily Quiz - {datetime.now().strftime('%d %B %Y')}")
 
 if __name__ == "__main__":
     asyncio.run(main())
