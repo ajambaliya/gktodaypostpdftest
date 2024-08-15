@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 mongo_uri = os.getenv('MONGO_URI')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 DEFAULT_CHANNEL = os.getenv('DEFAULT_CHANNEL')
-TEMPLATE_URL = os.getenv('TEMPLATE_URL')
+TEMPLATE_URL = os.getenv('TEMPLATE_URL','https://docs.google.com/document/d/12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD/edit?usp=sharing&ouid=108520131839767724661&rtpof=true&sd=true')
 
 # Initialize MongoDB client and Telegram bot
 client = MongoClient(mongo_uri)
@@ -167,8 +167,8 @@ async def main():
     
     for question in questions:
         question_text = question.get('Question', 'No question text')
-        options = [question.get('Option A', 'No option'), question.get('Option B', 'No option'), 
-                   question.get('Option C', 'No option'), question.get('Option D', 'No option')]
+        options = [str(question.get('Option A', 'No option')), str(question.get('Option B', 'No option')), 
+                   str(question.get('Option C', 'No option')), str(question.get('Option D', 'No option'))]
         correct_option_index = get_correct_option_index(question.get('Answer', 'a'))
         explanation = question.get('Explanation', None)
         
