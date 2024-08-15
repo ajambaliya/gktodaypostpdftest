@@ -1,16 +1,20 @@
 import io
 import os
 import requests
-import asyncio
-import telegram
-import tempfile
-import subprocess
 from bs4 import BeautifulSoup
 from odf.opendocument import load
 from odf.text import H, P, List
 from datetime import datetime
 import pymongo
 from deep_translator import GoogleTranslator, exceptions
+import asyncio
+import telegram
+import tempfile
+import subprocess
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # MongoDB setup
 DB_NAME = os.environ.get('DB_NAME')
@@ -24,7 +28,6 @@ client = pymongo.MongoClient(MONGO_CONNECTION_STRING)
 db = client[DB_NAME]
 collection = db[COLLECTION_NAME]
 
-# Custom exceptions
 class DownloadError(Exception):
     pass
 
@@ -39,6 +42,7 @@ class TelegramSendError(Exception):
 
 def fetch_article_urls(base_url, pages):
     article_urls = []
+    logging.info(f"Fetching article URLs from {base_url} across {pages} pages")
     for page in range(1, pages + 1):
         url = base_url if page == 1 else f"{base_url}page/{page}/"
         try:
@@ -49,8 +53,8 @@ def fetch_article_urls(base_url, pages):
                 a_tag = h1_tag.find('a')
                 if a_tag and a_tag.get('href'):
                     article_urls.append(a_tag['href'])
-        except requests.exceptions.RequestException as e:
-            print(f"Request Error: {e}")
+        except requests.RequestException as e:
+            logging.error(f"Error fetching URL {url}: {e}")
     return article_urls
 
 def translate_to_gujarati(text):
@@ -58,9 +62,10 @@ def translate_to_gujarati(text):
         translator = GoogleTranslator(source='auto', target='gu')
         return translator.translate(text)
     except exceptions.TranslationNotFoundException:
+        logging.warning("Translation not found, returning original text")
         return text
     except Exception as e:
-        print(f"Translation Error: {e}")
+        logging.error(f"Translation error: {e}")
         return text
 
 async def scrape_and_get_content(url):
@@ -71,17 +76,17 @@ async def scrape_and_get_content(url):
         main_content = soup.find('div', class_='inside_post column content_width')
         if not main_content:
             raise Exception("Main content div not found")
-
+        
         heading = main_content.find('h1', id='list')
         if not heading:
             raise Exception("Heading not found")
-
+        
         content_list = []
         heading_text = heading.get_text()
         translated_heading = translate_to_gujarati(heading_text)
         content_list.append({'type': 'heading', 'text': translated_heading})
         content_list.append({'type': 'heading', 'text': heading_text})
-
+        
         for tag in main_content.find_all(recursive=False):
             if tag.get('class') in [['sharethis-inline-share-buttons', 'st-center', 'st-has-labels', 'st-inline-share-buttons', 'st-animated'], ['prenext']]:
                 continue
@@ -103,59 +108,64 @@ async def scrape_and_get_content(url):
                     content_list.append({'type': 'list_item', 'text': f"• {translated_li_text}"})
                     content_list.append({'type': 'list_item', 'text': f"• {li_text}"})
         return content_list
-
     except Exception as e:
-        print(f"Scraping Error: {e}")
-        return []
+        logging.error(f"Error scraping content from {url}: {e}")
+        raise
 
 def insert_content_between_placeholders(doc, content_list):
     try:
         start_placeholder = end_placeholder = None
-
-        for i, para in enumerate(doc.text.childNodes):
+        
+        for i, para in enumerate(doc.text.getElementsByType(P)):
             if "START_CONTENT" in para.firstChild.data:
                 start_placeholder = i
             elif "END_CONTENT" in para.firstChild.data:
                 end_placeholder = i
                 break
-
+        
         if start_placeholder is None or end_placeholder is None:
-            raise ValueError("Could not find both placeholders")
-
-        # Remove existing content between placeholders
+            raise ContentInsertionError("Could not find both placeholders")
+        
+        logging.info("Removing existing content between placeholders")
         for i in range(end_placeholder - 1, start_placeholder, -1):
-            doc.text.removeChild(doc.text.childNodes[i])
-
-        # Add new content
+            doc.text.removeElement(doc.text.getElementsByType(P)[i])
+        
+        logging.info("Inserting new content between placeholders")
         content_list = content_list[::-1]
+        
         for content in content_list:
             if content['type'] == 'heading':
-                doc.text.insertBefore(H(level=1, text=content['text']), doc.text.childNodes[start_placeholder])
+                doc.text.addElement(H(level=1, text=content['text']))
             elif content['type'] == 'paragraph':
-                doc.text.insertBefore(P(text=content['text']), doc.text.childNodes[start_placeholder])
+                doc.text.addElement(P(text=content['text']))
             elif content['type'] == 'heading_2':
-                doc.text.insertBefore(H(level=2, text=content['text']), doc.text.childNodes[start_placeholder])
+                doc.text.addElement(H(level=2, text=content['text']))
             elif content['type'] == 'heading_4':
-                doc.text.insertBefore(H(level=4, text=content['text']), doc.text.childNodes[start_placeholder])
+                doc.text.addElement(H(level=4, text=content['text']))
             elif content['type'] == 'list_item':
-                doc.text.insertBefore(List(text=content['text']), doc.text.childNodes[start_placeholder])
-
+                doc.text.addElement(List(text=content['text']))
+        
+        logging.info("Clearing placeholder text")
+        doc.text.getElementsByType(P)[start_placeholder].setAttribute('text', "")
+        doc.text.getElementsByType(P)[end_placeholder].setAttribute('text', "")
     except Exception as e:
-        print(f"Content Insertion Error: {e}")
-        raise ContentInsertionError("Failed to insert content into the document.")
+        logging.error(f"Error inserting content into ODT document: {e}")
+        raise
 
 def download_template(url):
-    download_url = url.replace('/edit?usp=sharing', '/export?format=odt')
     try:
+        download_url = url.replace('/edit?usp=sharing', '/export?format=odt')
+        logging.info(f"Downloading template from {download_url}")
         response = requests.get(download_url)
         response.raise_for_status()
         return io.BytesIO(response.content)
-    except requests.exceptions.RequestException as e:
-        print(f"Download Error: {e}")
-        raise DownloadError("Failed to download the ODT template.")
+    except requests.RequestException as e:
+        logging.error(f"Error downloading template: {e}")
+        raise DownloadError("Failed to download template")
 
 def check_and_insert_urls(urls):
     new_urls = []
+    logging.info("Checking and inserting URLs")
     for url in urls:
         if 'daily-current-affairs-quiz' in url:
             continue
@@ -166,6 +176,7 @@ def check_and_insert_urls(urls):
 
 def convert_odt_to_pdf(odt_path, pdf_path):
     try:
+        logging.info(f"Converting ODT file {odt_path} to PDF at {pdf_path}")
         subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
                         os.path.dirname(pdf_path), odt_path], 
                        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -173,26 +184,34 @@ def convert_odt_to_pdf(odt_path, pdf_path):
         original_pdf_path = os.path.join(os.path.dirname(pdf_path), original_pdf)
         os.rename(original_pdf_path, pdf_path)
     except subprocess.CalledProcessError as e:
-        print(f"Conversion Error: {e}")
-        raise ConversionError("Failed to convert ODT to PDF.")
+        logging.error(f"Error converting ODT to PDF: {e}")
+        raise ConversionError("Failed to convert ODT to PDF")
 
 def rename_pdf(pdf_path, new_name):
-    new_pdf_path = os.path.join(os.path.dirname(pdf_path), new_name)
-    os.rename(pdf_path, new_pdf_path)
-    return new_pdf_path
+    try:
+        new_pdf_path = os.path.join(os.path.dirname(pdf_path), new_name)
+        logging.info(f"Renaming PDF file to {new_pdf_path}")
+        os.rename(pdf_path, new_pdf_path)
+        return new_pdf_path
+    except OSError as e:
+        logging.error(f"Error renaming PDF file: {e}")
+        raise
 
 async def send_pdf_to_telegram(pdf_path, bot_token, channel_id, caption):
     bot = telegram.Bot(token=bot_token)
+    logging.info(f"Sending PDF to Telegram channel {channel_id}")
     for _ in range(3):
         try:
             with open(pdf_path, 'rb') as pdf_file:
                 await bot.send_document(chat_id=channel_id, document=pdf_file, filename=os.path.basename(pdf_path), caption=caption)
+            logging.info("PDF sent successfully")
             break
         except telegram.error.TimedOut:
+            logging.warning("Timed out while sending PDF, retrying in 5 seconds")
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"Telegram Error: {e}")
-            raise TelegramSendError("Failed to send PDF to Telegram.")
+            logging.error(f"Error sending PDF to Telegram: {e}")
+            raise TelegramSendError("Failed to send PDF to Telegram")
 
 async def main():
     try:
@@ -200,49 +219,46 @@ async def main():
         article_urls = fetch_article_urls(base_url, 2)
         new_urls = check_and_insert_urls(article_urls)
         if not new_urls:
-            print("No new URLs found.")
+            logging.info("No new URLs found, exiting")
             return
-
+        
         template_url = os.environ.get('TEMPLATE_URL')
         if not template_url:
             raise ValueError("TEMPLATE_URL environment variable is not set")
 
-        template_bytes = download_template(template_url)
-        doc = load(template_bytes)
-
-        all_content = []
-        english_titles = []
-        tasks = [scrape_and_get_content(url) for url in new_urls]
-        results = await asyncio.gather(*tasks)
-
-        for content_list in results:
-            if content_list:
-                all_content.extend(content_list)
-                english_titles.append(content_list[0]['text'])  # Assuming the first item is the title
-
-        insert_content_between_placeholders(doc, all_content)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as tmp_odt:
-            doc.save(tmp_odt.name)
-
-        pdf_path = tmp_odt.name.replace('.odt', '.pdf')
-        convert_odt_to_pdf(tmp_odt.name, pdf_path)
-
-        # Rename the PDF file
-        current_date = datetime.now().strftime('%d-%m-%Y')
-        new_pdf_name = f"{current_date} Current Affairs.pdf"
-        renamed_pdf_path = rename_pdf(pdf_path, new_pdf_name)
-
         bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
         channel_id = os.environ.get('TELEGRAM_CHANNEL_ID')
-
-        if not bot_token or not channel_id:
+        if not all([bot_token, channel_id]):
             raise ValueError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHANNEL_ID environment variable is not set")
+        
+        caption = "Generated PDF document"
+        
+        for url in new_urls:
+            content_list = await scrape_and_get_content(url)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.odt') as odt_file:
+                odt_file_path = odt_file.name
+                logging.info(f"Creating temporary ODT file at {odt_file_path}")
+                template = download_template(template_url)
+                with open(odt_file_path, 'wb') as file:
+                    file.write(template.read())
 
-        await send_pdf_to_telegram(renamed_pdf_path, bot_token, channel_id, "Current Affairs PDF")
-
+                doc = load(odt_file_path)
+                insert_content_between_placeholders(doc, content_list)
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as pdf_file:
+                    pdf_file_path = pdf_file.name
+                    convert_odt_to_pdf(odt_file_path, pdf_file_path)
+                    
+                    new_pdf_name = f"Article_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                    final_pdf_path = rename_pdf(pdf_file_path, new_pdf_name)
+                    
+                    await send_pdf_to_telegram(final_pdf_path, bot_token, channel_id, caption)
+                    
+                os.remove(odt_file_path)
+                os.remove(final_pdf_path)
     except Exception as e:
-        print(f"Main Error: {e}")
+        logging.error(f"Error in main execution: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
