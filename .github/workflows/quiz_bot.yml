@@ -10,38 +10,22 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v2
+    - uses: actions/checkout@v2
     
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
         python-version: 3.9
     
-    - name: Cache Python packages
-      uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cache/pip
-          ~/.local
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libreoffice
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
     - name: Run the script
       env:
-        DB_NAME: ${{ secrets.DB_NAME }}
-        COLLECTION_NAME: ${{ secrets.COLLECTION_NAME }}
-        MONGO_CONNECTION_STRING: ${{ secrets.MONGO_CONNECTION_STRING }}
-        TEMPLATE_URL: ${{ secrets.TEMPLATE_URL }}
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        DEFAULT_CHANNEL: ${{ secrets.DEFAULT_CHANNEL }}
+        MONGO_URI: ${{ secrets.MONGO_URI }}
       run: |
         python main.py
