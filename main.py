@@ -221,7 +221,7 @@ async def main():
     try:
         base_url = 'https://www.gktoday.in/current-affairs/'
         pages = 2
-        template_url = 'https://jmp.sh/XCHbHO0d'
+        template_url = 'https://drive.google.com/file/d/1Qr96XcaRrmODZl4tvxhcZkneebj9OpGO/view?usp=drive_link'
 
         urls = fetch_article_urls(base_url, pages)
         new_urls = check_and_insert_urls(urls)
