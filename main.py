@@ -115,13 +115,20 @@ async def scrape_and_get_content(url):
 
 def insert_content_between_placeholders(doc, content_list):
     try:
+        logging.info("Starting to insert content between placeholders")
+        logging.info(f"Number of content items: {len(content_list)}")
+        logging.info(f"Types of content: {[content['type'] for content in content_list]}")
         start_placeholder = end_placeholder = None
         
         for i, para in enumerate(doc.text.getElementsByType(P)):
             para_text = ""
             for element in para.childNodes:
                 if isinstance(element, Element):
-                    para_text += element.text
+                    # Check if the element has a text attribute or method
+                    if hasattr(element, 'text'):
+                        para_text += element.text
+                    elif hasattr(element, 'getAttribute'):
+                        para_text += element.getAttribute('text') or ''
                 elif hasattr(element, 'data'):
                     para_text += element.data
             
@@ -142,6 +149,7 @@ def insert_content_between_placeholders(doc, content_list):
         content_list = content_list[::-1]
         
         for content in content_list:
+            try:
             if content['type'] == 'heading':
                 h = H(outlinelevel=1)
                 h.addElement(Span(text=content['text']))
@@ -158,6 +166,9 @@ def insert_content_between_placeholders(doc, content_list):
                 h = H(outlinelevel=4)
                 h.addElement(Span(text=content['text']))
                 doc.text.insertBefore(h, doc.text.getElementsByType(P)[start_placeholder + 1])
+        except Exception as e:
+            logging.error(f"Error inserting content of type {content['type']}: {e}")
+            raise
         
         logging.info("Clearing placeholder text")
         doc.text.getElementsByType(P)[start_placeholder].setTextContent("")
@@ -165,7 +176,7 @@ def insert_content_between_placeholders(doc, content_list):
     except Exception as e:
         logging.error(f"Error inserting content into ODT document: {e}")
         raise
-
+        
 def download_template(url):
     try:
         download_url = url.replace('/edit?usp=sharing', '/uc?export=download')
