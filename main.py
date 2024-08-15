@@ -158,6 +158,10 @@ def download_template(url):
         logging.info(f"Downloading template from {download_url}")
         response = requests.get(download_url)
         response.raise_for_status()
+        
+        if not response.content:
+            raise DownloadError("Downloaded file is empty")
+        
         return io.BytesIO(response.content)
     except requests.RequestException as e:
         logging.error(f"Error downloading template: {e}")
@@ -177,11 +181,17 @@ def check_and_insert_urls(urls):
 def convert_odt_to_pdf(odt_path, pdf_path):
     try:
         logging.info(f"Converting ODT file {odt_path} to PDF at {pdf_path}")
-        subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
-                        os.path.dirname(pdf_path), odt_path], 
-                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
+                                os.path.dirname(pdf_path), odt_path], 
+                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logging.info(f"Conversion output: {result.stdout.decode()}")
+        logging.error(f"Conversion errors: {result.stderr.decode()}")
+        
         original_pdf = os.path.splitext(os.path.basename(odt_path))[0] + '.pdf'
         original_pdf_path = os.path.join(os.path.dirname(pdf_path), original_pdf)
+        if not os.path.exists(original_pdf_path):
+            raise ConversionError(f"Converted PDF file does not exist at {original_pdf_path}")
+        
         os.rename(original_pdf_path, pdf_path)
     except subprocess.CalledProcessError as e:
         logging.error(f"Error converting ODT to PDF: {e}")
@@ -198,34 +208,24 @@ def rename_pdf(pdf_path, new_name):
         raise
 
 async def send_pdf_to_telegram(pdf_path, bot_token, channel_id, caption):
-    bot = telegram.Bot(token=bot_token)
-    logging.info(f"Sending PDF to Telegram channel {channel_id}")
-    for _ in range(3):
-        try:
-            with open(pdf_path, 'rb') as pdf_file:
-                await bot.send_document(chat_id=channel_id, document=pdf_file, filename=os.path.basename(pdf_path), caption=caption)
-            logging.info("PDF sent successfully")
-            break
-        except telegram.error.TimedOut:
-            logging.warning("Timed out while sending PDF, retrying in 5 seconds")
-            await asyncio.sleep(5)
-        except Exception as e:
-            logging.error(f"Error sending PDF to Telegram: {e}")
-            raise TelegramSendError("Failed to send PDF to Telegram")
+    try:
+        bot = telegram.Bot(token=bot_token)
+        with open(pdf_path, 'rb') as pdf_file:
+            await bot.send_document(chat_id=channel_id, document=pdf_file, caption=caption)
+        logging.info("PDF sent to Telegram successfully")
+    except Exception as e:
+        logging.error(f"Error sending PDF to Telegram: {e}")
+        raise
 
 async def main():
     try:
-        base_url = "https://www.gktoday.in/current-affairs/"
-        article_urls = fetch_article_urls(base_url, 2)
-        new_urls = check_and_insert_urls(article_urls)
-        if not new_urls:
-            logging.info("No new URLs found, exiting")
-            return
-        
-        template_url = os.environ.get('TEMPLATE_URL')
-        if not template_url:
-            raise ValueError("TEMPLATE_URL environment variable is not set")
+        base_url = 'https://www.gktoday.in/current-affairs/'
+        pages = 2
+        template_url = 'https://jmp.sh/XCHbHO0d'
 
+        urls = fetch_article_urls(base_url, pages)
+        new_urls = check_and_insert_urls(urls)
+        
         bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
         channel_id = os.environ.get('TELEGRAM_CHANNEL_ID')
         if not all([bot_token, channel_id]):
