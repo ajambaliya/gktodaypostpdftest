@@ -9,11 +9,12 @@ from pymongo import MongoClient
 import random
 from datetime import datetime
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 import io
 import subprocess
 import tempfile
+import math
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -60,13 +61,13 @@ def get_quiz_day():
     if day_record:
         return day_record['day']
     else:
-        last_day_record = collection.find_one(sort=[('date', pymongo.DESCENDING)])
+        last_day_record = collection.find_one(sort=[('date', -1)])
         new_day = 1 if not last_day_record else last_day_record['day'] + 1
         
         collection.insert_one({'date': today_datetime, 'day': new_day})
         return new_day
 
-def update_quiz_counter(collection_name):
+def get_quiz_number(collection_name):
     db = client['QuizCounters']
     collection = db['Counters']
     counter_record = collection.find_one({'collection_name': collection_name})
@@ -79,10 +80,10 @@ def update_quiz_counter(collection_name):
         collection.insert_one({'collection_name': collection_name, 'count': 1})
         return 1
 
-async def send_intro_message(collection_name, num_questions):
+async def send_intro_message(collection_name, num_questions, quiz_number):
     day = get_quiz_day()
     intro_message = (
-        f"🎯 *આજની કવિઝ - Day {day}* 🎯\n\n"
+        f"🎯 *આજની કવિઝ - Day {day} - {collection_name} Quiz {quiz_number}* 🎯\n\n"
         f"📚 વિષય: *{collection_name}*\n"
         f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n\n"
         f"🕐 અમારા ટેલીગ્રામ ચેનલમાં દરરોજ બપોરે *1 વાગ્યે* અને રાત્રે *9 વાગ્યે* "
@@ -132,42 +133,57 @@ def download_template(url):
         logger.error(f"Error downloading template: {e}")
         raise
 
-def update_document_with_content(doc_io, intro_message, questions):
-    # Save the BytesIO object to a temporary file
+def update_document_with_content(doc_io, intro_message, questions, collection_name, quiz_number):
     with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_docx_file:
         temp_docx_file.write(doc_io.read())
         temp_docx_path = temp_docx_file.name
     
-    # Load the document from the temporary file
     doc = Document(temp_docx_path)
     
     # Insert intro message
-    intro_found = False
+    start_found = False
+    end_found = False
     for paragraph in doc.paragraphs:
         if '<<START_CONTENT>>' in paragraph.text:
             paragraph.text = intro_message
             paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            paragraph.style.font.size = Pt(12)
-            intro_found = True
-            break
-
-    if not intro_found:
-        logger.warning("No <<START_CONTENT>> placeholder found in the document.")
-
-    # Insert questions
-    for paragraph in doc.paragraphs:
-        if '<<END_CONTENT>>' in paragraph.text:
+            paragraph.style.font.size = Pt(14)
+            paragraph.style.font.bold = True
+            paragraph.style.font.color.rgb = RGBColor(0, 0, 128)  # Dark blue color
+            start_found = True
+        elif '<<END_CONTENT>>' in paragraph.text:
+            paragraph.text = ""  # Remove the placeholder
+            end_found = True
+            # Insert questions after this paragraph
             for q in questions:
-                question_text = q.get('question', 'No question text')
-                question_paragraph = doc.add_paragraph(question_text)
-                question_paragraph.style.font.size = Pt(10)
-            break
+                question_text = q.get('Question', 'No question text')
+                question_paragraph = doc.add_paragraph(f"Q: {question_text}")
+                question_paragraph.style.font.size = Pt(12)
+                
+                options = [
+                    f"A) {q.get('Option A', 'No option')}",
+                    f"B) {q.get('Option B', 'No option')}",
+                    f"C) {q.get('Option C', 'No option')}",
+                    f"D) {q.get('Option D', 'No option')}"
+                ]
+                for option in options:
+                    option_paragraph = doc.add_paragraph(option)
+                    option_paragraph.style.font.size = Pt(10)
+                
+                answer = f"Answer: {q.get('Answer', 'Not provided')}"
+                answer_paragraph = doc.add_paragraph(answer)
+                answer_paragraph.style.font.size = Pt(10)
+                answer_paragraph.style.font.bold = True
+                
+                doc.add_paragraph()  # Add a blank line between questions
 
-    # Save the updated document to a temporary file
-    updated_doc_path = os.path.join(tempfile.gettempdir(), 'updated-template.docx')
+    if not start_found:
+        logger.warning("No <<START_CONTENT>> placeholder found in the document.")
+    if not end_found:
+        logger.warning("No <<END_CONTENT>> placeholder found in the document.")
+
+    updated_doc_path = os.path.join(tempfile.gettempdir(), f'{collection_name} Quiz {quiz_number}.docx')
     doc.save(updated_doc_path)
-    
-    return updated_doc_path
     
     return updated_doc_path
 
@@ -218,7 +234,18 @@ async def main():
     num_questions = 3
     questions = fetch_questions_from_collection('MasterQuestions', selected_collection, num_questions)
     
-    await send_intro_message(selected_collection, num_questions)
+    quiz_number = get_quiz_number(selected_collection)
+    
+    intro_message = (
+        f"🎯 *Day {get_quiz_day()} - {selected_collection} Quiz {quiz_number}* 🎯\n\n"
+        f"📚 *Quiz Collection*: {selected_collection}\n"
+        f"🔢 *Number of Questions*: {num_questions}\n\n"
+        f"🕐 Daily quizzes are posted at *1 PM* and *9 PM*.\n\n"
+        f"🔗 *Join*: @CurrentAdda\n\n"
+        f"🏆 Get ready for your quiz! 🚀"
+    )
+    
+    await send_intro_message(selected_collection, num_questions, quiz_number)
     await asyncio.sleep(5)
     
     for question in questions:
@@ -233,19 +260,11 @@ async def main():
             await asyncio.sleep(3)
     
     template_io = download_template(TEMPLATE_URL)
-    intro_message = (
-        f"🎯 *Day {get_quiz_day()}* 🎯\n\n"
-        f"📚 *Quiz Collection*: {selected_collection}\n"
-        f"🔢 *Number of Questions*: {num_questions}\n\n"
-        f"🕐 Daily quizzes are posted at *1 PM* and *9 PM*.\n\n"
-        f"🔗 *Join*: @CurrentAdda\n\n"
-        f"🏆 Get ready for your quiz! 🚀"
-    )
-    updated_doc_path = update_document_with_content(template_io, intro_message, questions)
-    pdf_path = os.path.join(tempfile.gettempdir(), f'{datetime.now().strftime("%d %B %Y")} Current Affairs.pdf')
+    updated_doc_path = update_document_with_content(template_io, intro_message, questions, selected_collection, quiz_number)
+    pdf_path = os.path.join(tempfile.gettempdir(), f'{selected_collection} Quiz {quiz_number}.pdf')
     
     convert_docx_to_pdf(updated_doc_path, pdf_path)
-    await send_pdf_to_channel(pdf_path, f"Daily Quiz - {datetime.now().strftime('%d %B %Y')}")
+    await send_pdf_to_channel(pdf_path, f"{selected_collection} Quiz {quiz_number} - {datetime.now().strftime('%d %B %Y')}")
 
 if __name__ == "__main__":
     asyncio.run(main())
