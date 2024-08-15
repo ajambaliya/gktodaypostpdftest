@@ -154,7 +154,8 @@ def insert_content_between_placeholders(doc, content_list):
 
 def download_template(url):
     try:
-        download_url = url.replace('/edit?usp=sharing', '/export?format=odt')
+        # Use direct download link format
+        download_url = url.replace('/edit?usp=sharing', '/uc?export=download')
         logging.info(f"Downloading template from {download_url}")
         response = requests.get(download_url)
         response.raise_for_status()
@@ -221,7 +222,7 @@ async def main():
     try:
         base_url = 'https://www.gktoday.in/current-affairs/'
         pages = 2
-        template_url = 'https://drive.google.com/file/d/1Qr96XcaRrmODZl4tvxhcZkneebj9OpGO/view?usp=drive_link'
+        template_url = 'https://drive.google.com/uc?export=download&id=1Qr96XcaRrmODZl4tvxhcZkneebj9OpGO'
 
         urls = fetch_article_urls(base_url, pages)
         new_urls = check_and_insert_urls(urls)
