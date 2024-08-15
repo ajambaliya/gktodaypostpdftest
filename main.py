@@ -1,16 +1,13 @@
-import io
 import os
-import requests
 import asyncio
-import telegram
-import tempfile
-import subprocess
+import requests
 from bs4 import BeautifulSoup
 from odf.opendocument import load
-from odf.text import H, P, List
-from datetime import datetime
+from odf.text import P, H
+from odf import tei  # Import for ODF handling
 import pymongo
-from deep_translator import GoogleTranslator, exceptions
+from datetime import datetime
+import telegram
 
 # MongoDB setup
 DB_NAME = os.environ.get('DB_NAME')
@@ -24,36 +21,16 @@ client = pymongo.MongoClient(MONGO_CONNECTION_STRING)
 db = client[DB_NAME]
 collection = db[COLLECTION_NAME]
 
-# Custom exceptions
-class DownloadError(Exception):
-    pass
-
-class ConversionError(Exception):
-    pass
-
-class ContentInsertionError(Exception):
-    pass
-
-class TelegramSendError(Exception):
-    pass
-
 def fetch_article_urls(base_url, pages):
     article_urls = []
     for page in range(1, pages + 1):
         url = base_url if page == 1 else f"{base_url}page/{page}/"
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Find all <h1> tags with id="list"
-            h1_tags = soup.find_all('h1', id='list')
-            for h1_tag in h1_tags:
-                a_tag = h1_tag.find('a')
-                if a_tag and a_tag.get('href'):
-                    article_urls.append(a_tag['href'])
-        except requests.exceptions.RequestException as e:
-            print(f"Request Error: {e}")
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        for h1_tag in soup.find_all('h1', id='list'):
+            a_tag = h1_tag.find('a')
+            if a_tag and a_tag.get('href'):
+                article_urls.append(a_tag['href'])
     return article_urls
 
 def translate_to_gujarati(text):
@@ -69,7 +46,6 @@ def translate_to_gujarati(text):
 async def scrape_and_get_content(url):
     try:
         response = requests.get(url)
-        response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         main_content = soup.find('div', class_='inside_post column content_width')
         if not main_content:
@@ -106,46 +82,39 @@ async def scrape_and_get_content(url):
                     content_list.append({'type': 'list_item', 'text': f"• {translated_li_text}"})
                     content_list.append({'type': 'list_item', 'text': f"• {li_text}"})
         return content_list
-
     except Exception as e:
-        print(f"Scraping Error: {e}")
+        print(f"Scraping Error for {url}: {e}")
         return []
 
 def insert_content_between_placeholders(doc, content_list):
-    try:
-        start_placeholder = end_placeholder = None
+    start_placeholder = end_placeholder = None
+    
+    for i, element in enumerate(doc.text):
+        if "START_CONTENT" in element.text:
+            start_placeholder = i
+        elif "END_CONTENT" in element.text:
+            end_placeholder = i
+            break
+    
+    if start_placeholder is None or end_placeholder is None:
+        raise Exception("Could not find both placeholders")
 
-        for i, para in enumerate(doc.text.childNodes):
-            if "START_CONTENT" in para.firstChild.data:
-                start_placeholder = i
-            elif "END_CONTENT" in para.firstChild.data:
-                end_placeholder = i
-                break
+    for i in range(end_placeholder - 1, start_placeholder, -1):
+        del doc.text[i]
 
-        if start_placeholder is None or end_placeholder is None:
-            raise ValueError("Could not find both placeholders")
+    content_list = content_list[::-1]
 
-        # Remove existing content between placeholders
-        for i in range(end_placeholder - 1, start_placeholder, -1):
-            doc.text.removeChild(doc.text.childNodes[i])
-
-        # Add new content
-        content_list = content_list[::-1]
-        for content in content_list:
-            if content['type'] == 'heading':
-                doc.text.insertBefore(H(level=1, text=content['text']), doc.text.childNodes[start_placeholder])
-            elif content['type'] == 'paragraph':
-                doc.text.insertBefore(P(text=content['text']), doc.text.childNodes[start_placeholder])
-            elif content['type'] == 'heading_2':
-                doc.text.insertBefore(H(level=2, text=content['text']), doc.text.childNodes[start_placeholder])
-            elif content['type'] == 'heading_4':
-                doc.text.insertBefore(H(level=4, text=content['text']), doc.text.childNodes[start_placeholder])
-            elif content['type'] == 'list_item':
-                doc.text.insertBefore(List(text=content['text']), doc.text.childNodes[start_placeholder])
-
-    except Exception as e:
-        print(f"Content Insertion Error: {e}")
-        raise ContentInsertionError("Failed to insert content into the document.")
+    for content in content_list:
+        if content['type'] == 'heading':
+            doc.text.insert(start_placeholder, H(1, text=content['text']))
+        elif content['type'] == 'paragraph':
+            doc.text.insert(start_placeholder, P(text=content['text']))
+        elif content['type'] == 'heading_2':
+            doc.text.insert(start_placeholder, H(2, text=content['text']))
+        elif content['type'] == 'heading_4':
+            doc.text.insert(start_placeholder, H(4, text=content['text']))
+        elif content['type'] == 'list_item':
+            doc.text.insert(start_placeholder, P(text=content['text']))
 
 def download_template(url):
     download_url = url.replace('/edit?usp=sharing', '/export?format=odt')
@@ -155,16 +124,17 @@ def download_template(url):
         return io.BytesIO(response.content)
     except requests.exceptions.RequestException as e:
         print(f"Download Error: {e}")
-        raise DownloadError("Failed to download the ODT template.")
+        raise
 
 def check_and_insert_urls(urls):
+    existing_urls = set(doc['url'] for doc in collection.find({}, {'url': 1}))
     new_urls = []
     for url in urls:
-        if 'daily-current-affairs-quiz' in url:
-            continue
-        if not collection.find_one({'url': url}):
+        if url not in existing_urls:
             new_urls.append(url)
             collection.insert_one({'url': url})
+        else:
+            print(f"URL already exists in MongoDB: {url}")
     return new_urls
 
 def convert_odt_to_pdf(odt_path, pdf_path):
@@ -177,7 +147,7 @@ def convert_odt_to_pdf(odt_path, pdf_path):
         os.rename(original_pdf_path, pdf_path)
     except subprocess.CalledProcessError as e:
         print(f"Conversion Error: {e}")
-        raise ConversionError("Failed to convert ODT to PDF.")
+        raise
 
 def rename_pdf(pdf_path, new_name):
     new_pdf_path = os.path.join(os.path.dirname(pdf_path), new_name)
@@ -193,24 +163,21 @@ async def send_pdf_to_telegram(pdf_path, bot_token, channel_id, caption):
             break
         except telegram.error.TimedOut:
             await asyncio.sleep(5)
-        except Exception as e:
-            print(f"Telegram Error: {e}")
-            raise TelegramSendError("Failed to send PDF to Telegram.")
 
 async def main():
     try:
         base_url = "https://www.gktoday.in/current-affairs/"
         article_urls = fetch_article_urls(base_url, 2)
-
+        
         # Add a hardcoded test URL for guaranteed processing
         test_url = "https://www.gktoday.in/bengaluru-researchers-discover-three-new-edible-bug-species/"
         article_urls.append(test_url)
-        
-        print(f"Extracted URLs: {article_urls}")  # Debugging
+
+        print(f"Extracted URLs: {article_urls}")
 
         new_urls = check_and_insert_urls(article_urls)
 
-        print(f"New URLs to process: {new_urls}")  # Debugging
+        print(f"New URLs to process: {new_urls}")
 
         if not new_urls:
             print("No new URLs found.")
@@ -225,7 +192,7 @@ async def main():
 
         content_lists = await asyncio.gather(*[scrape_and_get_content(url) for url in new_urls])
 
-        print(f"Content lists: {content_lists}")  # Debugging
+        print(f"Content lists: {content_lists}")
 
         for content_list in content_lists:
             insert_content_between_placeholders(doc, content_list)
