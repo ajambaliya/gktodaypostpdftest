@@ -36,21 +36,16 @@ class ContentInsertionError(Exception):
 
 class TelegramSendError(Exception):
     pass
-
 def fetch_article_urls(base_url, pages):
     article_urls = []
     for page in range(1, pages + 1):
         url = base_url if page == 1 else f"{base_url}page/{page}/"
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
-            for h1_tag in soup.find_all('h1', id='list'):
-                a_tag = h1_tag.find('a')
-                if a_tag and a_tag.get('href'):
-                    article_urls.append(a_tag['href'])
-        except requests.exceptions.RequestException as e:
-            print(f"Request Error: {e}")
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        for h1_tag in soup.find_all('h1', id='list'):
+            a_tag = h1_tag.find('a')
+            if a_tag and a_tag.get('href'):
+                article_urls.append(a_tag['href'])
     return article_urls
 
 def translate_to_gujarati(text):
