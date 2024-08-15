@@ -4,10 +4,11 @@ import requests
 from bs4 import BeautifulSoup
 from odf.opendocument import load
 from odf.text import P, H
-from odf import tei  # Import for ODF handling
 import pymongo
 from datetime import datetime
 import telegram
+import io
+import subprocess
 
 # MongoDB setup
 DB_NAME = os.environ.get('DB_NAME')
