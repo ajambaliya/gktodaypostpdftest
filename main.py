@@ -132,7 +132,7 @@ def download_template(url):
         logger.error(f"Error downloading template: {e}")
         raise
 
-ddef update_document_with_content(doc_io, intro_message, questions):
+def update_document_with_content(doc_io, intro_message, questions):
     # Save the BytesIO object to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_docx_file:
         temp_docx_file.write(doc_io.read())
