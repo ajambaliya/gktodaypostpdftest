@@ -1,9 +1,8 @@
 import io
 import os
 import requests
-from odf.opendocument import load
-from odf.text import H, P, List
-from odf import tei
+from odf.opendocument import load, OpenDocumentText
+from odf.text import H, P, List, ListItem
 from datetime import datetime
 import pymongo
 from deep_translator import GoogleTranslator, exceptions
@@ -86,7 +85,7 @@ async def scrape_and_get_content(url):
 def insert_content_between_placeholders(doc, content_list):
     start_placeholder = end_placeholder = None
     
-    for i, element in enumerate(doc.getElementsByType(tei.TextElement)):
+    for i, element in enumerate(doc.getElementsByType(P)):
         if "START_CONTENT" in element.text:
             start_placeholder = i
         elif "END_CONTENT" in element.text:
@@ -97,7 +96,7 @@ def insert_content_between_placeholders(doc, content_list):
         raise Exception("Could not find both placeholders")
 
     # Remove content between placeholders
-    while len(doc.text) > start_placeholder + 1:
+    for _ in range(start_placeholder + 1, end_placeholder):
         doc.text.remove(doc.text[start_placeholder + 1])
     
     # Insert new content
@@ -111,7 +110,7 @@ def insert_content_between_placeholders(doc, content_list):
         elif content['type'] == 'heading_4':
             doc.text.insert(start_placeholder + 1, H(text=content['text'], level=4))
         elif content['type'] == 'list_item':
-            doc.text.insert(start_placeholder + 1, List(text=content['text']))
+            doc.text.insert(start_placeholder + 1, ListItem(text=content['text']))
 
 def download_template(url):
     download_url = url.replace('/edit?usp=sharing', '/export?format=odt')
