@@ -132,7 +132,7 @@ def download_template(url):
         logger.error(f"Error downloading template: {e}")
         raise
 
-def update_document_with_content(doc_io, intro_message, questions):
+ddef update_document_with_content(doc_io, intro_message, questions):
     # Save the BytesIO object to a temporary file
     with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_docx_file:
         temp_docx_file.write(doc_io.read())
@@ -158,13 +158,16 @@ def update_document_with_content(doc_io, intro_message, questions):
     for paragraph in doc.paragraphs:
         if '<<END_CONTENT>>' in paragraph.text:
             for q in questions:
-                question_paragraph = doc.add_paragraph(f"{q['question']}")
+                question_text = q.get('question', 'No question text')
+                question_paragraph = doc.add_paragraph(question_text)
                 question_paragraph.style.font.size = Pt(10)
             break
 
     # Save the updated document to a temporary file
     updated_doc_path = os.path.join(tempfile.gettempdir(), 'updated-template.docx')
     doc.save(updated_doc_path)
+    
+    return updated_doc_path
     
     return updated_doc_path
 
