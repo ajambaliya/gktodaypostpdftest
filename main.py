@@ -1,6 +1,7 @@
 import io
 import os
 import requests
+from bs4 import BeautifulSoup
 from odf.opendocument import load, OpenDocumentText
 from odf.text import H, P, List, ListItem
 from datetime import datetime
@@ -9,6 +10,7 @@ from deep_translator import GoogleTranslator, exceptions
 import asyncio
 import telegram
 import tempfile
+import subprocess
 
 # MongoDB setup
 DB_NAME = os.environ.get('DB_NAME')
