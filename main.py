@@ -118,8 +118,10 @@ def insert_content_between_placeholders(doc, content_list):
     del doc.text[end_placeholder - 1]
 
 def download_template(url):
+    # Modify Dropbox URL to enable direct download
+    download_url = url.replace('?dl=0', '?dl=1')
     try:
-        response = requests.get(url)
+        response = requests.get(download_url)
         response.raise_for_status()
         return io.BytesIO(response.content)
     except requests.exceptions.RequestException:
@@ -176,9 +178,7 @@ async def main():
         if not new_urls:
             return
         
-        template_url = os.environ.get('TEMPLATE_URL')
-        if not template_url:
-            raise ValueError("TEMPLATE_URL environment variable is not set")
+        template_url = "https://www.dropbox.com/scl/fi/g5hvf7n3zssd55yfhhgqi/Sample-Current-2024.odt?rlkey=np9mawsdbvt5c1codmzl1ialz&e=1&st=9ffne3if&dl=0"
         
         template_bytes = download_template(template_url)
         
