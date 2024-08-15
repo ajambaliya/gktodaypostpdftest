@@ -6,19 +6,18 @@ from telegram.constants import ParseMode
 from pymongo import MongoClient
 import random
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 import pdfkit
 import requests
-from datetime import datetime, timedelta
 
 # Read environment variables
 mongo_uri = os.getenv('MONGO_URI')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 DEFAULT_CHANNEL = os.getenv('DEFAULT_CHANNEL')
-TEMPLATE_URL = os.getenv('TEMPLATE_URL','https://drive.google.com/uc?export=download&id=12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD')
+TEMPLATE_URL = os.getenv('TEMPLATE_URL', 'https://drive.google.com/uc?export=download&id=12t9nJzPPHqXbRcH3As4PitcJi9w0SeuD')
 
 # Initialize MongoDB client and Telegram bot
 client = MongoClient(mongo_uri)
@@ -116,10 +115,10 @@ async def send_quiz_to_channel(question, options, correct_option_index, explanat
 def fetch_template():
     try:
         response = requests.get(TEMPLATE_URL)
-        response.raise_for_status()  # Raises an error for HTTP issues
+        response.raise_for_status()
         with open("template.docx", "wb") as file:
             file.write(response.content)
-        return "template-quiz.docx"
+        return "template.docx"
     except requests.exceptions.RequestException as e:
         print(f"Error downloading the template: {e}")
         return None
@@ -139,7 +138,7 @@ def update_document_with_content(doc_path, intro_message, questions):
     for paragraph in doc.paragraphs:
         if '<<END_CONTENT>>' in paragraph.text:
             for q in questions:
-                question_paragraph = doc.add_paragraph(f"{q['question']}")
+                question_paragraph = doc.add_paragraph(f"{q['Question']}")
                 question_paragraph.style.font.size = Pt(10)
             break
     
@@ -182,10 +181,14 @@ async def main():
             await asyncio.sleep(3)
     
     template_path = fetch_template()
+    if not template_path:
+        return  # Exit if the template could not be downloaded
+    
     intro_message = (
         f"🎯 *Day {get_quiz_day()}* 🎯\n\n"
         f"📚 વિષય: *{selected_collection}*\n"
         f"🔢 પ્રશ્નોની સંખ્યા: *{num_questions}*\n"
+        f"🔗 *Join* : @CurrentAdda\n\n"
     )
     
     update_document_with_content(template_path, intro_message, questions)
