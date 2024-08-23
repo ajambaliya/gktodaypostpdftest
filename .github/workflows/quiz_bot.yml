@@ -1,4 +1,4 @@
-name: Telegram Quiz Bot
+name: Run Current Affairs Script
 
 on:
   push:
@@ -22,18 +22,22 @@ jobs:
         context: .
         push: false
         load: true
-        tags: telegram-quiz-bot:latest
+        tags: current-affairs:latest
 
     - name: Run Docker container
       env:
-        TELEGRAM_BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-        TELEGRAM_CHANNEL_USERNAME: ${{ secrets.DEFAULT_CHANNEL }}
-        MONGO_CONNECTION_STRING: ${{ secrets.MONGO_URI }}
+        DB_NAME: ${{ secrets.DB_NAME }}
+        COLLECTION_NAME: ${{ secrets.COLLECTION_NAME }}
+        MONGO_CONNECTION_STRING: ${{ secrets.MONGO_CONNECTION_STRING }}
         TEMPLATE_URL: ${{ secrets.TEMPLATE_URL }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
       run: |
         docker run --rm \
-          -e TELEGRAM_BOT_TOKEN \
-          -e TELEGRAM_CHANNEL_USERNAME \
+          -e DB_NAME \
+          -e COLLECTION_NAME \
           -e MONGO_CONNECTION_STRING \
           -e TEMPLATE_URL \
-          telegram-quiz-bot:latest
+          -e TELEGRAM_BOT_TOKEN \
+          -e TELEGRAM_CHANNEL_ID \
+          current-affairs:latest
